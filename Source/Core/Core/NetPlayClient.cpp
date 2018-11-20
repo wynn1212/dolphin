@@ -33,8 +33,10 @@
 #include "Common/StringUtil.h"
 #include "Common/Timer.h"
 #include "Common/Version.h"
+#include "Core/ActionReplay.h"
 #include "Core/Config/NetplaySettings.h"
 #include "Core/ConfigManager.h"
+#include "Core/GeckoCode.h"
 #include "Core/HW/EXI/EXI_DeviceIPL.h"
 #include "Core/HW/SI/SI.h"
 #include "Core/HW/SI/SI_DeviceGCController.h"
@@ -150,7 +152,7 @@ NetPlayClient::NetPlayClient(const std::string& address, const u16 port, NetPlay
     if (address.size() > NETPLAY_CODE_SIZE)
     {
       m_dialog->OnConnectionError(
-          _trans("Host code size is too large.\nPlease recheck that you have the correct code."));
+          _trans("The host code is too long.\nPlease recheck that you have the correct code."));
       return;
     }
 
@@ -543,12 +545,14 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
       packet >> m_net_settings.m_ArbitraryMipmapDetection;
       packet >> m_net_settings.m_ArbitraryMipmapDetectionThreshold;
       packet >> m_net_settings.m_EnableGPUTextureDecoding;
+      packet >> m_net_settings.m_DeferEFBCopies;
       packet >> m_net_settings.m_StrictSettingsSync;
 
       m_initial_rtc = Common::PacketReadU64(packet);
 
       packet >> m_net_settings.m_SyncSaveData;
       packet >> m_net_settings.m_SaveDataRegion;
+      packet >> m_net_settings.m_SyncCodes;
 
       m_net_settings.m_IsHosting = m_local_player->IsHost();
       m_net_settings.m_HostInputAuthority = m_host_input_authority;
@@ -565,6 +569,12 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
 
     StopGame();
     m_dialog->OnMsgStopGame();
+  }
+  break;
+
+  case NP_MSG_POWER_BUTTON:
+  {
+    m_dialog->OnMsgPowerButton();
   }
   break;
 
@@ -620,15 +630,16 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
 
   case NP_MSG_SYNC_GC_SRAM:
   {
-    u8 sram[sizeof(g_SRAM.p_SRAM)];
-    for (size_t i = 0; i < sizeof(g_SRAM.p_SRAM); ++i)
+    const size_t sram_settings_len = sizeof(g_SRAM) - offsetof(Sram, settings);
+    u8 sram[sram_settings_len];
+    for (size_t i = 0; i < sram_settings_len; ++i)
     {
       packet >> sram[i];
     }
 
     {
       std::lock_guard<std::recursive_mutex> lkg(m_crit.game);
-      memcpy(g_SRAM.p_SRAM, sram, sizeof(g_SRAM.p_SRAM));
+      memcpy(&g_SRAM.settings, sram, sram_settings_len);
       g_SRAM_netplay_initialized = true;
     }
   }
@@ -643,6 +654,9 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
     {
     case SYNC_SAVE_DATA_NOTIFY:
     {
+      if (m_local_player->IsHost())
+        return 0;
+
       packet >> m_sync_save_data_count;
       m_sync_save_data_success_count = 0;
 
@@ -747,29 +761,29 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
       {
         // Header
         WiiSave::Header header;
-        header.tid = Common::PacketReadU64(packet);
-        header.banner_size = Common::PacketReadU32(packet);
+        packet >> header.tid;
+        packet >> header.banner_size;
         packet >> header.permissions;
         packet >> header.unk1;
         for (size_t i = 0; i < header.md5.size(); i++)
           packet >> header.md5[i];
-        header.unk2 = Common::PacketReadU16(packet);
+        packet >> header.unk2;
         for (size_t i = 0; i < header.banner_size; i++)
           packet >> header.banner[i];
 
         // BkHeader
         WiiSave::BkHeader bk_header;
-        bk_header.size = Common::PacketReadU32(packet);
-        bk_header.magic = Common::PacketReadU32(packet);
-        bk_header.ngid = Common::PacketReadU32(packet);
-        bk_header.number_of_files = Common::PacketReadU32(packet);
-        bk_header.size_of_files = Common::PacketReadU32(packet);
-        bk_header.unk1 = Common::PacketReadU32(packet);
-        bk_header.unk2 = Common::PacketReadU32(packet);
-        bk_header.total_size = Common::PacketReadU32(packet);
+        packet >> bk_header.size;
+        packet >> bk_header.magic;
+        packet >> bk_header.ngid;
+        packet >> bk_header.number_of_files;
+        packet >> bk_header.size_of_files;
+        packet >> bk_header.unk1;
+        packet >> bk_header.unk2;
+        packet >> bk_header.total_size;
         for (size_t i = 0; i < bk_header.unk3.size(); i++)
           packet >> bk_header.unk3[i];
-        bk_header.tid = Common::PacketReadU64(packet);
+        packet >> bk_header.tid;
         for (size_t i = 0; i < bk_header.mac_address.size(); i++)
           packet >> bk_header.mac_address[i];
 
@@ -818,6 +832,163 @@ unsigned int NetPlayClient::OnData(sf::Packet& packet)
     default:
       PanicAlertT("Unknown SYNC_SAVE_DATA message received with id: %d", sub_id);
       break;
+    }
+  }
+  break;
+
+  case NP_MSG_SYNC_CODES:
+  {
+    // Recieve Data Packet
+    MessageId sub_id;
+    packet >> sub_id;
+
+    // Check Which Operation to Perform with This Packet
+    switch (sub_id)
+    {
+    case SYNC_CODES_NOTIFY:
+    {
+      // Set both codes as unsynced
+      m_sync_gecko_codes_complete = false;
+      m_sync_ar_codes_complete = false;
+    }
+    break;
+
+    case SYNC_CODES_NOTIFY_GECKO:
+    {
+      // Return if this is the host
+      if (m_local_player->IsHost())
+        return 0;
+
+      // Receive Number of Codelines to Receive
+      packet >> m_sync_gecko_codes_count;
+
+      m_sync_gecko_codes_success_count = 0;
+
+      NOTICE_LOG(ACTIONREPLAY, "Receiving %d Gecko codelines", m_sync_gecko_codes_count);
+
+      // Check if no codes to sync, if so return as finished
+      if (m_sync_gecko_codes_count == 0)
+      {
+        m_sync_gecko_codes_complete = true;
+        SyncCodeResponse(true);
+      }
+      else
+        m_dialog->AppendChat(GetStringT("Synchronizing Gecko codes..."));
+    }
+    break;
+
+    case SYNC_CODES_DATA_GECKO:
+    {
+      // Return if this is the host
+      if (m_local_player->IsHost())
+        return 0;
+
+      // Create a synced code vector
+      std::vector<Gecko::GeckoCode> synced_codes;
+      // Create a GeckoCode
+      Gecko::GeckoCode gcode;
+      gcode = Gecko::GeckoCode();
+      // Initialize gcode
+      gcode.name = "Synced Codes";
+      gcode.enabled = true;
+
+      // Receive code contents from packet
+      for (int i = 0; i < m_sync_gecko_codes_count; i++)
+      {
+        Gecko::GeckoCode::Code new_code;
+        packet >> new_code.address;
+        packet >> new_code.data;
+
+        NOTICE_LOG(ACTIONREPLAY, "Received %08x %08x", new_code.address, new_code.data);
+
+        gcode.codes.push_back(std::move(new_code));
+
+        if (++m_sync_gecko_codes_success_count >= m_sync_gecko_codes_count)
+        {
+          m_sync_gecko_codes_complete = true;
+          SyncCodeResponse(true);
+        }
+      }
+
+      // Add gcode containing all codes to Gecko Code vector
+      synced_codes.push_back(std::move(gcode));
+
+      // Clear Vector if received 0 codes (match host's end when using no codes)
+      if (m_sync_gecko_codes_count == 0)
+        synced_codes.clear();
+
+      // Copy this to the vector located in GeckoCode.cpp
+      Gecko::UpdateSyncedCodes(synced_codes);
+    }
+    break;
+
+    case SYNC_CODES_NOTIFY_AR:
+    {
+      // Return if this is the host
+      if (m_local_player->IsHost())
+        return 0;
+
+      // Receive Number of Codelines to Receive
+      packet >> m_sync_ar_codes_count;
+
+      m_sync_ar_codes_success_count = 0;
+
+      NOTICE_LOG(ACTIONREPLAY, "Receiving %d AR codelines", m_sync_ar_codes_count);
+
+      // Check if no codes to sync, if so return as finished
+      if (m_sync_ar_codes_count == 0)
+      {
+        m_sync_ar_codes_complete = true;
+        SyncCodeResponse(true);
+      }
+      else
+        m_dialog->AppendChat(GetStringT("Synchronizing AR codes..."));
+    }
+    break;
+
+    case SYNC_CODES_DATA_AR:
+    {
+      // Return if this is the host
+      if (m_local_player->IsHost())
+        return 0;
+
+      // Create a synced code vector
+      std::vector<ActionReplay::ARCode> synced_codes;
+      // Create an ARCode
+      ActionReplay::ARCode arcode;
+      arcode = ActionReplay::ARCode();
+      // Initialize arcode
+      arcode.name = "Synced Codes";
+      arcode.active = true;
+
+      // Receive code contents from packet
+      for (int i = 0; i < m_sync_ar_codes_count; i++)
+      {
+        ActionReplay::AREntry new_code;
+        packet >> new_code.cmd_addr;
+        packet >> new_code.value;
+
+        NOTICE_LOG(ACTIONREPLAY, "Received %08x %08x", new_code.cmd_addr, new_code.value);
+        arcode.ops.push_back(new_code);
+
+        if (++m_sync_ar_codes_success_count >= m_sync_ar_codes_count)
+        {
+          m_sync_ar_codes_complete = true;
+          SyncCodeResponse(true);
+        }
+      }
+
+      // Add arcode containing all codes to AR Code vector
+      synced_codes.push_back(std::move(arcode));
+
+      // Clear Vector if received 0 codes (match host's end when using no codes)
+      if (m_sync_ar_codes_count == 0)
+        synced_codes.clear();
+
+      // Copy this to the vector located in ActionReplay.cpp
+      ActionReplay::UpdateSyncedCodes(synced_codes);
+    }
+    break;
     }
   }
   break;
@@ -1192,10 +1363,37 @@ void NetPlayClient::SyncSaveDataResponse(const bool success)
   }
 }
 
+void NetPlayClient::SyncCodeResponse(const bool success)
+{
+  // If something failed, immediately report back that code sync failed
+  if (!success)
+  {
+    m_dialog->AppendChat(GetStringT("Error processing Codes."));
+
+    sf::Packet response_packet;
+    response_packet << static_cast<MessageId>(NP_MSG_SYNC_CODES);
+    response_packet << static_cast<MessageId>(SYNC_CODES_FAILURE);
+
+    Send(response_packet);
+    return;
+  }
+
+  // If both gecko and AR codes have completely finished transferring, report back as successful
+  if (m_sync_gecko_codes_complete && m_sync_ar_codes_complete)
+  {
+    m_dialog->AppendChat(GetStringT("Codes received!"));
+
+    sf::Packet response_packet;
+    response_packet << static_cast<MessageId>(NP_MSG_SYNC_CODES);
+    response_packet << static_cast<MessageId>(SYNC_CODES_SUCCESS);
+
+    Send(response_packet);
+  }
+}
+
 bool NetPlayClient::DecompressPacketIntoFile(sf::Packet& packet, const std::string& file_path)
 {
   u64 file_size = Common::PacketReadU64(packet);
-  ;
 
   if (file_size == 0)
     return true;
@@ -1244,7 +1442,6 @@ bool NetPlayClient::DecompressPacketIntoFile(sf::Packet& packet, const std::stri
 std::optional<std::vector<u8>> NetPlayClient::DecompressPacketIntoBuffer(sf::Packet& packet)
 {
   u64 size = Common::PacketReadU64(packet);
-  ;
 
   std::vector<u8> out_buffer(size);
 
@@ -1702,6 +1899,13 @@ void NetPlayClient::RequestStopGame()
     SendStopGamePacket();
 }
 
+void NetPlayClient::SendPowerButtonEvent()
+{
+  sf::Packet packet;
+  packet << static_cast<MessageId>(NP_MSG_POWER_BUTTON);
+  SendAsync(std::move(packet));
+}
+
 // called from ---GUI--- thread
 bool NetPlayClient::LocalPlayerHasControllerMapped() const
 {
@@ -1882,6 +2086,12 @@ void ClearWiiSyncFS()
 void SetSIPollBatching(bool state)
 {
   s_si_poll_batching = state;
+}
+
+void SendPowerButtonEvent()
+{
+  ASSERT(IsNetPlayRunning());
+  netplay_client->SendPowerButtonEvent();
 }
 
 void NetPlay_Enable(NetPlayClient* const np)

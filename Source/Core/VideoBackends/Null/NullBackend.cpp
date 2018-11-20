@@ -54,10 +54,9 @@ void VideoBackend::InitBackendInfo()
   g_Config.backend_info.AAModes = {1};
 }
 
-bool VideoBackend::Initialize(void* window_handle)
+bool VideoBackend::Initialize(const WindowSystemInfo& wsi)
 {
   InitializeShared();
-  InitBackendInfo();
 
   g_renderer = std::make_unique<Renderer>();
   g_vertex_manager = std::make_unique<VertexManager>();
@@ -81,4 +80,4 @@ void VideoBackend::Shutdown()
 
   ShutdownShared();
 }
-}
+}  // namespace Null

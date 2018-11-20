@@ -34,10 +34,12 @@
 #include "Common/Thread.h"
 #include "Common/Timer.h"
 
+#include "Core/Analytics.h"
 #include "Core/Config/SYSCONFSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/FifoPlayer/FifoRecorder.h"
+#include "Core/HW/SystemTimers.h"
 #include "Core/HW/VideoInterface.h"
 #include "Core/Host.h"
 #include "Core/Movie.h"
@@ -83,10 +85,8 @@ Renderer::Renderer(int backbuffer_width, int backbuffer_height)
   UpdateDrawRectangle();
   CalculateTargetSize();
 
-  if (SConfig::GetInstance().bWii)
-    m_aspect_wide = Config::Get(Config::SYSCONF_WIDESCREEN);
+  m_aspect_wide = SConfig::GetInstance().bWii && Config::Get(Config::SYSCONF_WIDESCREEN);
 
-  m_surface_handle = Host_GetRenderHandle();
   m_last_host_config_bits = ShaderHostConfig::GetCurrent().bits;
   m_last_efb_multisamples = g_ActiveConfig.iMultisamples;
 }
@@ -408,7 +408,7 @@ float Renderer::CalculateDrawAspectRatio() const
 
 bool Renderer::IsHeadless() const
 {
-  return !m_surface_handle;
+  return true;
 }
 
 void Renderer::ChangeSurface(void* new_surface_handle)
@@ -418,11 +418,9 @@ void Renderer::ChangeSurface(void* new_surface_handle)
   m_surface_changed.Set();
 }
 
-void Renderer::ResizeSurface(int new_width, int new_height)
+void Renderer::ResizeSurface()
 {
   std::lock_guard<std::mutex> lock(m_swap_mutex);
-  m_new_backbuffer_width = new_width;
-  m_new_backbuffer_height = new_height;
   m_surface_resized.Set();
 }
 
@@ -640,9 +638,19 @@ void Renderer::RecordVideoMemory()
 void Renderer::Swap(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const EFBRectangle& rc,
                     u64 ticks)
 {
-  // Heuristic to detect if a GameCube game is in 16:9 anamorphic widescreen mode.
-  if (!SConfig::GetInstance().bWii)
+  const AspectMode suggested = g_ActiveConfig.suggested_aspect_mode;
+  if (suggested == AspectMode::Analog || suggested == AspectMode::AnalogWide)
   {
+    m_aspect_wide = suggested == AspectMode::AnalogWide;
+  }
+  else if (SConfig::GetInstance().bWii)
+  {
+    m_aspect_wide = Config::Get(Config::SYSCONF_WIDESCREEN);
+  }
+  else
+  {
+    // Heuristic to detect if a GameCube game is in 16:9 anamorphic widescreen mode.
+
     size_t flush_count_4_3, flush_count_anamorphic;
     std::tie(flush_count_4_3, flush_count_anamorphic) =
         g_vertex_manager->ResetFlushAspectRatioCount();
@@ -701,6 +709,12 @@ void Renderer::Swap(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const 
 
       m_fps_counter.Update();
 
+      DolphinAnalytics::PerformanceSample perf_sample;
+      perf_sample.speed_ratio = SystemTimers::GetEstimatedEmulationPerformance();
+      perf_sample.num_prims = stats.thisFrame.numPrims + stats.thisFrame.numDLPrims;
+      perf_sample.num_draw_calls = stats.thisFrame.numDrawCalls;
+      DolphinAnalytics::Instance()->ReportPerformanceInfo(std::move(perf_sample));
+
       if (IsFrameDumping())
         DumpCurrentFrame();
 
@@ -718,6 +732,10 @@ void Renderer::Swap(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const 
       // and hybrid ubershaders have compiled the specialized shader, but without any
       // state changes the specialized shader will not take over.
       g_vertex_manager->InvalidatePipelineObject();
+
+      // Flush any outstanding EFB copies to RAM, in case the game is running at an uncapped frame
+      // rate and not waiting for vblank. Otherwise, we'd end up with a huge list of pending copies.
+      g_texture_cache->FlushEFBCopies();
 
       Core::Callback_VideoCopiedToXFB(true);
     }

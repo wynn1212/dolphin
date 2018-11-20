@@ -21,6 +21,7 @@ import org.dolphinemu.dolphinemu.features.settings.model.Settings;
 import org.dolphinemu.dolphinemu.features.settings.model.StringSetting;
 import org.dolphinemu.dolphinemu.features.settings.model.view.CheckBoxSetting;
 import org.dolphinemu.dolphinemu.features.settings.model.view.InputBindingSetting;
+import org.dolphinemu.dolphinemu.features.settings.model.view.RumbleBindingSetting;
 import org.dolphinemu.dolphinemu.features.settings.model.view.SettingsItem;
 import org.dolphinemu.dolphinemu.features.settings.model.view.SingleChoiceSetting;
 import org.dolphinemu.dolphinemu.features.settings.model.view.SliderSetting;
@@ -29,6 +30,7 @@ import org.dolphinemu.dolphinemu.features.settings.model.view.SubmenuSetting;
 import org.dolphinemu.dolphinemu.features.settings.ui.viewholder.CheckBoxSettingViewHolder;
 import org.dolphinemu.dolphinemu.features.settings.ui.viewholder.HeaderViewHolder;
 import org.dolphinemu.dolphinemu.features.settings.ui.viewholder.InputBindingSettingViewHolder;
+import org.dolphinemu.dolphinemu.features.settings.ui.viewholder.RumbleBindingViewHolder;
 import org.dolphinemu.dolphinemu.features.settings.ui.viewholder.SettingViewHolder;
 import org.dolphinemu.dolphinemu.features.settings.ui.viewholder.SingleChoiceViewHolder;
 import org.dolphinemu.dolphinemu.features.settings.ui.viewholder.SliderViewHolder;
@@ -89,6 +91,10 @@ public final class SettingsAdapter extends RecyclerView.Adapter<SettingViewHolde
       case SettingsItem.TYPE_INPUT_BINDING:
         view = inflater.inflate(R.layout.list_item_setting, parent, false);
         return new InputBindingSettingViewHolder(view, this, mContext);
+
+      case SettingsItem.TYPE_RUMBLE_BINDING:
+        view = inflater.inflate(R.layout.list_item_setting, parent, false);
+        return new RumbleBindingViewHolder(view, this, mContext);
 
       default:
         Log.error("[SettingsAdapter] Invalid view type: " + viewType);
@@ -216,19 +222,17 @@ public final class SettingsAdapter extends RecyclerView.Adapter<SettingViewHolde
   {
     final MotionAlertDialog dialog = new MotionAlertDialog(mContext, item);
     dialog.setTitle(R.string.input_binding);
-    dialog.setMessage(String.format(mContext.getString(R.string.input_binding_description),
+    dialog.setMessage(String.format(mContext.getString(
+            item instanceof RumbleBindingSetting ?
+                    R.string.input_rumble_description : R.string.input_binding_description),
             mContext.getString(item.getNameId())));
     dialog.setButton(AlertDialog.BUTTON_NEGATIVE, mContext.getString(R.string.cancel), this);
     dialog.setButton(AlertDialog.BUTTON_NEUTRAL, mContext.getString(R.string.clear),
             (dialogInterface, i) ->
             {
-              item.setValue("");
-
-              SharedPreferences sharedPreferences =
+              SharedPreferences preferences =
                       PreferenceManager.getDefaultSharedPreferences(mContext);
-              SharedPreferences.Editor editor = sharedPreferences.edit();
-              editor.remove(item.getKey());
-              editor.apply();
+              item.clearValue();
             });
     dialog.setOnDismissListener(dialog1 ->
     {
@@ -288,7 +292,14 @@ public final class SettingsAdapter extends RecyclerView.Adapter<SettingViewHolde
         else if (scSetting.getKey().equals(SettingsFile.KEY_WIIMOTE_EXTENSION))
         {
           putExtensionSetting(which, Character.getNumericValue(
-                  scSetting.getSection().charAt(scSetting.getSection().length() - 1)));
+                  scSetting.getSection().charAt(scSetting.getSection().length() - 1)), false);
+        }
+        else if (scSetting.getKey().contains(SettingsFile.KEY_WIIMOTE_EXTENSION) &&
+                scSetting.getSection().equals(Settings.SECTION_CONTROLS))
+        {
+          putExtensionSetting(which, Character
+                          .getNumericValue(scSetting.getKey().charAt(scSetting.getKey().length() - 1)),
+                  true);
         }
       }
 
@@ -309,12 +320,11 @@ public final class SettingsAdapter extends RecyclerView.Adapter<SettingViewHolde
     else if (mClickedItem instanceof SliderSetting)
     {
       SliderSetting sliderSetting = (SliderSetting) mClickedItem;
-      if (sliderSetting.getSetting() instanceof FloatSetting)
+      if (sliderSetting.isPercentSetting() || sliderSetting.getSetting() instanceof FloatSetting)
       {
         float value;
 
-        if (sliderSetting.getKey().equals(SettingsFile.KEY_OVERCLOCK_PERCENT)
-                || sliderSetting.getKey().equals(SettingsFile.KEY_SPEED_LIMIT))
+        if (sliderSetting.isPercentSetting())
         {
           value = mSeekbarProgress / 100.0f;
         }
@@ -439,11 +449,22 @@ public final class SettingsAdapter extends RecyclerView.Adapter<SettingViewHolde
     mView.putSetting(gfxBackend);
   }
 
-  private void putExtensionSetting(int which, int wiimoteNumber)
+  private void putExtensionSetting(int which, int wiimoteNumber, boolean isGame)
   {
-    StringSetting extension = new StringSetting(SettingsFile.KEY_WIIMOTE_EXTENSION,
-            Settings.SECTION_WIIMOTE + wiimoteNumber,
-            mContext.getResources().getStringArray(R.array.wiimoteExtensionsEntries)[which]);
-    mView.putSetting(extension);
+    if (!isGame)
+    {
+      StringSetting extension = new StringSetting(SettingsFile.KEY_WIIMOTE_EXTENSION,
+              Settings.SECTION_WIIMOTE + wiimoteNumber,
+              mContext.getResources().getStringArray(R.array.wiimoteExtensionsEntries)[which]);
+      mView.putSetting(extension);
+    }
+    else
+    {
+      StringSetting extension =
+              new StringSetting(SettingsFile.KEY_WIIMOTE_EXTENSION + wiimoteNumber,
+                      Settings.SECTION_CONTROLS, mContext.getResources()
+                      .getStringArray(R.array.wiimoteExtensionsEntries)[which]);
+      mView.putSetting(extension);
+    }
   }
 }

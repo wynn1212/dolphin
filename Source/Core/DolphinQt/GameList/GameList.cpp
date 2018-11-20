@@ -14,6 +14,7 @@
 #include <QFileInfo>
 #include <QFrame>
 #include <QHeaderView>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QListView>
@@ -64,6 +65,9 @@ GameList::GameList(QWidget* parent) : QStackedWidget(parent)
   MakeGridView();
   MakeEmptyView();
 
+  if (Settings::GetQSettings().contains(QStringLiteral("gridview/scale")))
+    m_model->SetScale(Settings::GetQSettings().value(QStringLiteral("gridview/scale")).toFloat());
+
   connect(m_list, &QTableView::doubleClicked, this, &GameList::GameSelected);
   connect(m_grid, &QListView::doubleClicked, this, &GameList::GameSelected);
   connect(m_model, &QAbstractItemModel::rowsInserted, this, &GameList::ConsiderViewChange);
@@ -83,6 +87,11 @@ GameList::GameList(QWidget* parent) : QStackedWidget(parent)
 
   connect(&Settings::Instance(), &Settings::MetadataRefreshCompleted, this,
           [this] { m_grid_proxy->invalidate(); });
+}
+
+void GameList::PurgeCache()
+{
+  m_model->PurgeCache();
 }
 
 void GameList::MakeListView()
@@ -129,6 +138,7 @@ void GameList::MakeListView()
   hor_header->setSectionResizeMode(GameListModel::COL_COUNTRY, QHeaderView::Fixed);
   hor_header->setSectionResizeMode(GameListModel::COL_SIZE, QHeaderView::Fixed);
   hor_header->setSectionResizeMode(GameListModel::COL_FILE_NAME, QHeaderView::Interactive);
+  hor_header->setSectionResizeMode(GameListModel::COL_TAGS, QHeaderView::Interactive);
 
   // There's some odd platform-specific behavior with default minimum section size
   hor_header->setMinimumSectionSize(38);
@@ -155,6 +165,7 @@ GameList::~GameList()
 {
   Settings::GetQSettings().setValue(QStringLiteral("tableheader/state"),
                                     m_list->horizontalHeader()->saveState());
+  Settings::GetQSettings().setValue(QStringLiteral("gridview/scale"), m_model->GetScale());
 }
 
 void GameList::UpdateColumnVisibility()
@@ -170,6 +181,7 @@ void GameList::UpdateColumnVisibility()
   m_list->setColumnHidden(GameListModel::COL_SIZE, !SConfig::GetInstance().m_showSizeColumn);
   m_list->setColumnHidden(GameListModel::COL_FILE_NAME,
                           !SConfig::GetInstance().m_showFileNameColumn);
+  m_list->setColumnHidden(GameListModel::COL_TAGS, !SConfig::GetInstance().m_showTagsColumn);
 }
 
 void GameList::MakeEmptyView()
@@ -332,6 +344,35 @@ void GameList::ShowContextMenu(const QPoint&)
     menu->addAction(tr("Open &containing folder"), this, &GameList::OpenContainingFolder);
     menu->addAction(tr("Delete File..."), this, &GameList::DeleteFile);
 
+    menu->addSeparator();
+
+    auto* model = Settings::Instance().GetGameListModel();
+
+    auto* tags_menu = menu->addMenu(tr("Tags"));
+
+    auto path = game->GetFilePath();
+    auto game_tags = model->GetGameTags(path);
+
+    for (const auto& tag : model->GetAllTags())
+    {
+      auto* tag_action = tags_menu->addAction(tag);
+
+      tag_action->setCheckable(true);
+      tag_action->setChecked(game_tags.contains(tag));
+
+      connect(tag_action, &QAction::toggled, this, [this, path, tag, model](bool checked) {
+        if (!checked)
+          model->RemoveGameTag(path, tag);
+        else
+          model->AddGameTag(path, tag);
+      });
+    }
+
+    menu->addAction(tr("New Tag..."), this, &GameList::NewTag);
+    menu->addAction(tr("Remove Tag..."), this, &GameList::DeleteTag);
+
+    menu->addSeparator();
+
     QAction* netplay_host = new QAction(tr("Host with NetPlay"), menu);
 
     connect(netplay_host, &QAction::triggered, [this, game] {
@@ -460,6 +501,9 @@ void GameList::CompressISO(bool decompress)
             .append(decompress ? QStringLiteral(".gcm") : QStringLiteral(".gcz")),
         decompress ? tr("Uncompressed GC/Wii images (*.iso *.gcm)") :
                      tr("Compressed GC/Wii images (*.gcz)"));
+
+    if (dst_path.isEmpty())
+      return;
   }
 
   for (const auto& file : files)
@@ -738,7 +782,8 @@ void GameList::OnColumnVisibilityToggled(const QString& row, bool visible)
       {tr("File Name"), GameListModel::COL_FILE_NAME},
       {tr("Game ID"), GameListModel::COL_ID},
       {tr("Region"), GameListModel::COL_COUNTRY},
-      {tr("File Size"), GameListModel::COL_SIZE}};
+      {tr("File Size"), GameListModel::COL_SIZE},
+      {tr("Tags"), GameListModel::COL_TAGS}};
 
   m_list->setColumnHidden(rowname_to_col_index[row], !visible);
 }
@@ -853,6 +898,26 @@ void GameList::OnHeaderViewChanged()
   }
 
   block = false;
+}
+
+void GameList::NewTag()
+{
+  auto tag = QInputDialog::getText(this, tr("New tag"), tr("Name for a new tag:"));
+
+  if (tag.isEmpty())
+    return;
+
+  Settings::Instance().GetGameListModel()->NewTag(tag);
+}
+
+void GameList::DeleteTag()
+{
+  auto tag = QInputDialog::getText(this, tr("Remove tag"), tr("Name of the tag to remove:"));
+
+  if (tag.isEmpty())
+    return;
+
+  Settings::Instance().GetGameListModel()->DeleteTag(tag);
 }
 
 void GameList::SetSearchTerm(const QString& term)
