@@ -275,6 +275,7 @@
     <ClInclude Include="GL\GLContext.h">
       <Filter>GL\GLInterface</Filter>
     </ClInclude>
+    <ClInclude Include="VariantUtil.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="CDUtils.cpp" />
