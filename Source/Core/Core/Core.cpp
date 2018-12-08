@@ -214,6 +214,9 @@ bool Init(std::unique_ptr<BootParameters> boot, const WindowSystemInfo& wsi)
 
   Host_UpdateMainFrame();  // Disable any menus or buttons at boot
 
+  // Issue any API calls which must occur on the main thread for the graphics backend.
+  g_video_backend->PrepareWindow(wsi);
+
   // Start the emu thread
   s_emu_thread = std::thread(EmuThread, std::move(boot), wsi);
   return true;
@@ -241,6 +244,10 @@ void Stop()  // - Hammertime!
   const SConfig& _CoreParameter = SConfig::GetInstance();
 
   s_is_stopping = true;
+
+  // Notify state changed callback
+  if (s_on_state_changed_callback)
+    s_on_state_changed_callback(State::Stopping);
 
   // Dump left over jobs
   HostDispatchJobs();

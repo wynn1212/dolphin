@@ -275,6 +275,8 @@ void MainWindow::InitCoreCallbacks()
   connect(&Settings::Instance(), &Settings::EmulationStateChanged, this, [=](Core::State state) {
     if (state == Core::State::Uninitialized)
       OnStopComplete();
+    if (state != Core::State::Uninitialized && NetPlay::IsNetPlayRunning() && m_controllers_window)
+      m_controllers_window->reject();
 
     if (state == Core::State::Running && m_fullscreen_requested)
     {
@@ -556,6 +558,7 @@ void MainWindow::ConnectStack()
 
   setCentralWidget(m_stack);
 
+  setDockOptions(DockOption::AllowNestedDocks);
   setTabPosition(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea, QTabWidget::North);
   addDockWidget(Qt::LeftDockWidgetArea, m_log_widget);
   addDockWidget(Qt::LeftDockWidgetArea, m_log_config_widget);
