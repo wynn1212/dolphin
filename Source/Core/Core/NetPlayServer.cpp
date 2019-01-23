@@ -107,8 +107,8 @@ NetPlayServer::NetPlayServer(const u16 port, const bool forward_port,
     PanicAlertT("Enet Didn't Initialize");
   }
 
-  m_pad_map.fill(-1);
-  m_wiimote_map.fill(-1);
+  m_pad_map.fill(0);
+  m_wiimote_map.fill(0);
 
   if (traversal_config.use_traversal)
   {
@@ -145,6 +145,20 @@ NetPlayServer::NetPlayServer(const u16 port, const bool forward_port,
     if (forward_port)
       UPnP::TryPortmapping(port);
 #endif
+  }
+}
+
+static PlayerId* PeerPlayerId(ENetPeer* peer)
+{
+  return static_cast<PlayerId*>(peer->data);
+}
+
+static void ClearPeerPlayerId(ENetPeer* peer)
+{
+  if (peer->data)
+  {
+    delete PeerPlayerId(peer);
+    peer->data = nullptr;
   }
 }
 
@@ -195,26 +209,10 @@ void NetPlayServer::ThreadFunc()
       {
       case ENET_EVENT_TYPE_CONNECT:
       {
-        ENetPeer* accept_peer = netEvent.peer;
-        unsigned int error;
-        {
-          std::lock_guard<std::recursive_mutex> lkg(m_crit.game);
-          error = OnConnect(accept_peer);
-        }
-
-        if (error)
-        {
-          sf::Packet spac;
-          spac << (MessageId)error;
-          // don't need to lock, this client isn't in the client map
-          Send(accept_peer, spac);
-          if (netEvent.peer->data)
-          {
-            delete (PlayerId*)netEvent.peer->data;
-            netEvent.peer->data = nullptr;
-          }
-          enet_peer_disconnect_later(accept_peer, 0);
-        }
+        // Actual client initialization is deferred to the receive event, so here
+        // we'll just log the new connection.
+        INFO_LOG(NETPLAY, "Peer connected from: %x:%u", netEvent.peer->address.host,
+                 netEvent.peer->address.port);
       }
       break;
       case ENET_EVENT_TYPE_RECEIVE:
@@ -222,18 +220,37 @@ void NetPlayServer::ThreadFunc()
         sf::Packet rpac;
         rpac.append(netEvent.packet->data, netEvent.packet->dataLength);
 
-        auto it = m_players.find(*(PlayerId*)netEvent.peer->data);
-        Client& client = it->second;
-        if (OnData(rpac, client) != 0)
+        if (!netEvent.peer->data)
         {
-          // if a bad packet is received, disconnect the client
-          std::lock_guard<std::recursive_mutex> lkg(m_crit.game);
-          OnDisconnect(client);
-
-          if (netEvent.peer->data)
+          // uninitialized client, we'll assume this is their initialization packet
+          unsigned int error;
           {
-            delete (PlayerId*)netEvent.peer->data;
-            netEvent.peer->data = nullptr;
+            std::lock_guard<std::recursive_mutex> lkg(m_crit.game);
+            error = OnConnect(netEvent.peer, rpac);
+          }
+
+          if (error)
+          {
+            sf::Packet spac;
+            spac << static_cast<MessageId>(error);
+            // don't need to lock, this client isn't in the client map
+            Send(netEvent.peer, spac);
+
+            ClearPeerPlayerId(netEvent.peer);
+            enet_peer_disconnect_later(netEvent.peer, 0);
+          }
+        }
+        else
+        {
+          auto it = m_players.find(*PeerPlayerId(netEvent.peer));
+          Client& client = it->second;
+          if (OnData(rpac, client) != 0)
+          {
+            // if a bad packet is received, disconnect the client
+            std::lock_guard<std::recursive_mutex> lkg(m_crit.game);
+            OnDisconnect(client);
+
+            ClearPeerPlayerId(netEvent.peer);
           }
         }
         enet_packet_destroy(netEvent.packet);
@@ -244,17 +261,13 @@ void NetPlayServer::ThreadFunc()
         std::lock_guard<std::recursive_mutex> lkg(m_crit.game);
         if (!netEvent.peer->data)
           break;
-        auto it = m_players.find(*(PlayerId*)netEvent.peer->data);
+        auto it = m_players.find(*PeerPlayerId(netEvent.peer));
         if (it != m_players.end())
         {
           Client& client = it->second;
           OnDisconnect(client);
 
-          if (netEvent.peer->data)
-          {
-            delete (PlayerId*)netEvent.peer->data;
-            netEvent.peer->data = nullptr;
-          }
+          ClearPeerPlayerId(netEvent.peer);
         }
       }
       break;
@@ -267,23 +280,14 @@ void NetPlayServer::ThreadFunc()
   // close listening socket and client sockets
   for (auto& player_entry : m_players)
   {
-    delete (PlayerId*)player_entry.second.socket->data;
-    player_entry.second.socket->data = nullptr;
+    ClearPeerPlayerId(player_entry.second.socket);
     enet_peer_disconnect(player_entry.second.socket, 0);
   }
 }
 
 // called from ---NETPLAY--- thread
-unsigned int NetPlayServer::OnConnect(ENetPeer* socket)
+unsigned int NetPlayServer::OnConnect(ENetPeer* socket, sf::Packet& rpac)
 {
-  sf::Packet rpac;
-  ENetPacket* epack;
-  do
-  {
-    epack = enet_peer_receive(socket, nullptr);
-  } while (epack == nullptr);
-  rpac.append(epack->data, epack->dataLength);
-
   // give new client first available id
   PlayerId pid = 1;
   for (auto i = m_players.begin(); i != m_players.end(); ++i)
@@ -320,11 +324,10 @@ unsigned int NetPlayServer::OnConnect(ENetPeer* socket)
   rpac >> player.revision;
   rpac >> player.name;
 
-  enet_packet_destroy(epack);
   // try to automatically assign new user a pad
-  for (PadMapping& mapping : m_pad_map)
+  for (PlayerId& mapping : m_pad_map)
   {
-    if (mapping == -1)
+    if (mapping == 0)
     {
       mapping = player.pid;
       break;
@@ -402,7 +405,7 @@ unsigned int NetPlayServer::OnConnect(ENetPeer* socket)
   // add client to the player list
   {
     std::lock_guard<std::recursive_mutex> lkp(m_crit.players);
-    m_players.emplace(*(PlayerId*)player.socket->data, std::move(player));
+    m_players.emplace(*PeerPlayerId(player.socket), std::move(player));
     UpdatePadMapping();  // sync pad mappings with everyone
     UpdateWiimoteMapping();
   }
@@ -417,7 +420,7 @@ unsigned int NetPlayServer::OnDisconnect(const Client& player)
 
   if (m_is_running)
   {
-    for (PadMapping mapping : m_pad_map)
+    for (PlayerId& mapping : m_pad_map)
     {
       if (mapping == pid && pid != 1)
       {
@@ -427,7 +430,7 @@ unsigned int NetPlayServer::OnDisconnect(const Client& player)
         sf::Packet spac;
         spac << (MessageId)NP_MSG_DISABLE_GAME;
         // this thread doesn't need players lock
-        SendToClients(spac, static_cast<PlayerId>(-1));
+        SendToClients(spac);
         break;
       }
     }
@@ -447,20 +450,20 @@ unsigned int NetPlayServer::OnDisconnect(const Client& player)
   // alert other players of disconnect
   SendToClients(spac);
 
-  for (PadMapping& mapping : m_pad_map)
+  for (PlayerId& mapping : m_pad_map)
   {
     if (mapping == pid)
     {
-      mapping = -1;
+      mapping = 0;
       UpdatePadMapping();
     }
   }
 
-  for (PadMapping& mapping : m_wiimote_map)
+  for (PlayerId& mapping : m_wiimote_map)
   {
     if (mapping == pid)
     {
-      mapping = -1;
+      mapping = 0;
       UpdateWiimoteMapping();
     }
   }
@@ -498,7 +501,7 @@ void NetPlayServer::UpdatePadMapping()
 {
   sf::Packet spac;
   spac << (MessageId)NP_MSG_PAD_MAPPING;
-  for (PadMapping mapping : m_pad_map)
+  for (PlayerId mapping : m_pad_map)
   {
     spac << mapping;
   }
@@ -510,7 +513,7 @@ void NetPlayServer::UpdateWiimoteMapping()
 {
   sf::Packet spac;
   spac << (MessageId)NP_MSG_WIIMOTE_MAPPING;
-  for (PadMapping mapping : m_wiimote_map)
+  for (PlayerId mapping : m_wiimote_map)
   {
     spac << mapping;
   }
@@ -653,7 +656,7 @@ unsigned int NetPlayServer::OnData(sf::Packet& packet, Client& player)
 
     while (!packet.endOfPacket())
     {
-      PadMapping map;
+      PadIndex map;
       packet >> map;
 
       // If the data is not from the correct player,
@@ -692,7 +695,7 @@ unsigned int NetPlayServer::OnData(sf::Packet& packet, Client& player)
 
   case NP_MSG_PAD_HOST_POLL:
   {
-    PadMapping pad_num;
+    PadIndex pad_num;
     packet >> pad_num;
 
     sf::Packet spac;
@@ -702,16 +705,16 @@ unsigned int NetPlayServer::OnData(sf::Packet& packet, Client& player)
     {
       for (size_t i = 0; i < m_pad_map.size(); i++)
       {
-        if (m_pad_map[i] == -1)
+        if (m_pad_map[i] == 0)
           continue;
 
         const GCPadStatus& pad = m_last_pad_status[i];
-        spac << static_cast<PadMapping>(i) << pad.button << pad.analogA << pad.analogB << pad.stickX
+        spac << static_cast<PadIndex>(i) << pad.button << pad.analogA << pad.analogB << pad.stickX
              << pad.stickY << pad.substickX << pad.substickY << pad.triggerLeft << pad.triggerRight
              << pad.isConnected;
       }
     }
-    else if (m_pad_map.at(pad_num) != -1)
+    else if (m_pad_map.at(pad_num) != 0)
     {
       const GCPadStatus& pad = m_last_pad_status[pad_num];
       spac << pad_num << pad.button << pad.analogA << pad.analogB << pad.stickX << pad.stickY
@@ -729,7 +732,7 @@ unsigned int NetPlayServer::OnData(sf::Packet& packet, Client& player)
     if (player.current_game != m_current_game)
       break;
 
-    PadMapping map = 0;
+    PadIndex map;
     u8 size;
     packet >> map >> size;
     std::vector<u8> data(size);
@@ -850,7 +853,7 @@ unsigned int NetPlayServer::OnData(sf::Packet& packet, Client& player)
             return pair.second == timebases[0].second;
           }))
       {
-        int pid_to_blame = -1;
+        int pid_to_blame = 0;
         for (auto pair : timebases)
         {
           if (std::all_of(timebases.begin(), timebases.end(), [&](std::pair<PlayerId, u64> other) {
@@ -1715,7 +1718,7 @@ bool NetPlayServer::CompressBufferIntoPacket(const std::vector<u8>& in_buffer, s
   return true;
 }
 
-void NetPlayServer::SendFirstReceivedToHost(const PadMapping map, const bool state)
+void NetPlayServer::SendFirstReceivedToHost(const PadIndex map, const bool state)
 {
   sf::Packet pac;
   pac << static_cast<MessageId>(NP_MSG_PAD_FIRST_RECEIVED);

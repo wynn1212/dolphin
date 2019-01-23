@@ -118,14 +118,14 @@ private:
   void CheckSyncAndStartGame();
   bool CompressFileIntoPacket(const std::string& file_path, sf::Packet& packet);
   bool CompressBufferIntoPacket(const std::vector<u8>& in_buffer, sf::Packet& packet);
-  void SendFirstReceivedToHost(PadMapping map, bool state);
+  void SendFirstReceivedToHost(PadIndex map, bool state);
 
   u64 GetInitialNetPlayRTC() const;
 
   void SendToClients(const sf::Packet& packet, PlayerId skip_pid = 0,
                      u8 channel_id = DEFAULT_CHANNEL);
   void Send(ENetPeer* socket, const sf::Packet& packet, u8 channel_id = DEFAULT_CHANNEL);
-  unsigned int OnConnect(ENetPeer* socket);
+  unsigned int OnConnect(ENetPeer* socket, sf::Packet& rpac);
   unsigned int OnDisconnect(const Client& player);
   unsigned int OnData(sf::Packet& packet, Client& player);
 

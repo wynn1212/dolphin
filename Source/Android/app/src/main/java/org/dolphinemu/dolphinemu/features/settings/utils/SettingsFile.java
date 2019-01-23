@@ -45,6 +45,7 @@ public final class SettingsFile
   public static final String KEY_SPEED_LIMIT = "EmulationSpeed";
   public static final String KEY_VIDEO_BACKEND = "GFXBackend";
   public static final String KEY_AUDIO_STRETCH = "AudioStretch";
+  public static final String KEY_AUTO_DISC_CHANGE = "AutoDiscChange";
   public static final String KEY_GAME_CUBE_LANGUAGE = "SelectedLanguage";
   public static final String KEY_OVERRIDE_GAME_CUBE_LANGUAGE = "OverrideGCLang";
   public static final String KEY_SLOT_A_DEVICE = "SlotA";
@@ -89,6 +90,16 @@ public final class SettingsFile
   public static final String KEY_ASPECT_RATIO = "AspectRatio";
   public static final String KEY_SHADER_COMPILATION_MODE = "ShaderCompilationMode";
   public static final String KEY_WAIT_FOR_SHADERS = "WaitForShadersBeforeStarting";
+
+  public static final String KEY_DEBUG_JITOFF = "JitOff";
+  public static final String KEY_DEBUG_JITLOADSTOREOFF = "JitLoadStoreOff";
+  public static final String KEY_DEBUG_JITLOADSTOREFLOATINGPOINTOFF = "JitLoadStoreFloatingOff";
+  public static final String KEY_DEBUG_JITLOADSTOREPAIREDOFF = "JitLoadStorePairedOff";
+  public static final String KEY_DEBUG_JITFLOATINGPOINTOFF = "JitFloatingPointOff";
+  public static final String KEY_DEBUG_JITINTEGEROFF = "JitIntegerOff";
+  public static final String KEY_DEBUG_JITPAIREDOFF = "JitPairedOff";
+  public static final String KEY_DEBUG_JITSYSTEMREGISTEROFF = "JitSystemRegistersOff";
+  public static final String KEY_DEBUG_JITBRANCHOFF = "JitBranchOff";
 
   public static final String KEY_GCPAD_TYPE = "SIDevice";
   public static final String KEY_GCPAD_G_TYPE = "PadType";

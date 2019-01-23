@@ -136,6 +136,7 @@
     <string name="wiimote_speaker_description">Enable sound output through the speaker on a real Wiimote (DolphinBar required).</string>
     <string name="audio_stretch">Audio Stretching</string>
     <string name="audio_stretch_description">Stretches audio to reduce stuttering. Increases latency.</string>
+    <string name="auto_disc_change">Change Discs Automatically</string>
     <string name="enable_save_states">Enable Savestates</string>
     <string name="enable_save_states_description">WARNING: Savestates may not be compatible with future versions of Dolphin and can make it impossible to create normal saves in some cases. Never use savestates as the only way of saving your progress.</string>
     <string name="lock_emulation_landscape">Lock screen to landscape</string>
@@ -229,6 +230,20 @@
     <string name="shader_compilation_mode_description">Specifies when to use Ubershaders. Disabled - Never, Hybrid - Use ubershaders while compiling specialized shaders. Exclusive - Use only ubershaders, largest performance impact. Skip Drawing - Do not draw objects while shaders are compiling, will cause broken effects.</string>
     <string name="wait_for_shaders">Compile Shaders Before Starting</string>
     <string name="wait_for_shaders_description">This causes a delay when launching games, but will reduce stuttering early on.</string>
+
+    <!-- Debug -->
+    <string name="debug_submenu">Debug</string>
+    <string name="debug_warning">Warning: These settings will slow emulation</string>
+    <string name="debug_jit_header">Jit</string>
+    <string name="debug_jitoff">Jit Disabled</string>
+    <string name="debug_jitloadstoreoff">Jit Load Store Disabled</string>
+    <string name="debug_jitloadstorefloatingoff">Jit Load Store Floating Point Disabled</string>
+    <string name="debug_jitloadstorepairedoff">Jit Load Store Paired Disabled</string>
+    <string name="debug_jitfloatingpointoff">Jit Floating Point Disabled</string>
+    <string name="debug_jitintegeroff">Jit Integer Disabled</string>
+    <string name="debug_jitpairedoff">Jit Paired Disabled</string>
+    <string name="debug_jitsystemregistersoffr">Jit System Registers Disabled</string>
+    <string name="debug_jitbranchoff">Jit Branch Disabled</string>
 
     <!-- Miscellaneous -->
     <string name="yes">Yes</string>
