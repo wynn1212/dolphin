@@ -452,12 +452,13 @@ public final class SettingsFragmentPresenter
             enhancementSection.getSetting(SettingsFile.KEY_ARBITRARY_MIPMAP_DETECTION);
     Setting wideScreenHack = gfxSection.getSetting(SettingsFile.KEY_WIDE_SCREEN_HACK);
     Setting force24BitColor = enhancementSection.getSetting(SettingsFile.KEY_FORCE_24_BIT_COLOR);
+    Setting backendMultithreading = gfxSection.getSetting(SettingsFile.KEY_BACKEND_MULTITHREADING);
 
     sl.add(new SingleChoiceSetting(SettingsFile.KEY_INTERNAL_RES, Settings.SECTION_GFX_SETTINGS,
             R.string.internal_resolution, R.string.internal_resolution_description,
             R.array.internalResolutionEntries, R.array.internalResolutionValues, 1, resolution));
     sl.add(new SingleChoiceSetting(SettingsFile.KEY_FSAA, Settings.SECTION_GFX_SETTINGS,
-            R.string.FSAA, R.string.FSAA_description, R.array.FSAAEntries, R.array.FSAAValues, 0,
+            R.string.FSAA, R.string.FSAA_description, R.array.FSAAEntries, R.array.FSAAValues, 1,
             fsaa));
     sl.add(new SingleChoiceSetting(SettingsFile.KEY_ANISOTROPY, Settings.SECTION_GFX_ENHANCEMENTS,
             R.string.anisotropic_filtering, R.string.anisotropic_filtering_description,
@@ -501,6 +502,10 @@ public final class SettingsFragmentPresenter
     sl.add(new CheckBoxSetting(SettingsFile.KEY_WIDE_SCREEN_HACK, Settings.SECTION_GFX_SETTINGS,
             R.string.wide_screen_hack, R.string.wide_screen_hack_description, false,
             wideScreenHack));
+    sl.add(new CheckBoxSetting(SettingsFile.KEY_BACKEND_MULTITHREADING,
+            Settings.SECTION_GFX_SETTINGS,
+            R.string.backend_multithreading, R.string.backend_multithreading_description, false,
+            backendMultithreading));
 
      /*
      Check if we support stereo
@@ -534,7 +539,7 @@ public final class SettingsFragmentPresenter
       if (shaderFiles != null)
       {
         String[] result = new String[shaderFiles.length + 1];
-        result[0] = "Off";
+        result[0] = mView.getActivity().getString(R.string.off);
         for (int i = 0; i < shaderFiles.length; i++)
         {
           String name = shaderFiles[i].getName();

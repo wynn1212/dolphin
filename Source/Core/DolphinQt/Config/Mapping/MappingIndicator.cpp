@@ -6,7 +6,10 @@
 
 #include <array>
 #include <cmath>
+#include <numeric>
 
+#include <QAction>
+#include <QDateTime>
 #include <QPainter>
 #include <QTimer>
 
@@ -15,10 +18,12 @@
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerEmu/Control/Control.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Cursor.h"
+#include "InputCommon/ControllerEmu/ControlGroup/Force.h"
 #include "InputCommon/ControllerEmu/ControlGroup/MixedTriggers.h"
 #include "InputCommon/ControllerEmu/Setting/NumericSetting.h"
 #include "InputCommon/ControllerInterface/Device.h"
 
+#include "DolphinQt/QtUtils/ModalMessageBox.h"
 #include "DolphinQt/Settings.h"
 
 // Color constants to keep things looking consistent:
@@ -41,16 +46,19 @@ const QColor STICK_GATE_COLOR = Qt::lightGray;
 const QColor C_STICK_GATE_COLOR = Qt::yellow;
 const QColor CURSOR_TV_COLOR = 0xaed6f1;
 const QColor TILT_GATE_COLOR = 0xa2d9ce;
+const QColor SWING_GATE_COLOR = 0xcea2d9;
 
 constexpr int INPUT_DOT_RADIUS = 2;
+
+constexpr int INDICATOR_UPDATE_FREQ = 30;
 
 MappingIndicator::MappingIndicator(ControllerEmu::ControlGroup* group) : m_group(group)
 {
   setMinimumHeight(128);
 
-  m_timer = new QTimer(this);
-  connect(m_timer, &QTimer::timeout, this, [this] { repaint(); });
-  m_timer->start(1000 / 30);
+  const auto timer = new QTimer(this);
+  connect(timer, &QTimer::timeout, this, [this] { repaint(); });
+  timer->start(1000 / INDICATOR_UPDATE_FREQ);
 }
 
 namespace
@@ -75,6 +83,49 @@ QPolygonF GetPolygonFromRadiusGetter(F&& radius_getter, double scale)
 
   return shape;
 }
+
+// Used to check if the user seems to have attempted proper calibration.
+bool IsCalibrationDataSensible(const ControllerEmu::ReshapableInput::CalibrationData& data)
+{
+  // Test that the average input radius is not below a threshold.
+  // This will make sure the user has actually moved their stick from neutral.
+
+  // Even the GC controller's small range would pass this test.
+  constexpr double REASONABLE_AVERAGE_RADIUS = 0.6;
+
+  const double sum = std::accumulate(data.begin(), data.end(), 0.0);
+  const double mean = sum / data.size();
+
+  if (mean < REASONABLE_AVERAGE_RADIUS)
+  {
+    return false;
+  }
+
+  // Test that the standard deviation is below a threshold.
+  // This will make sure the user has not just filled in one side of their input.
+
+  // Approx. deviation of a square input gate, anything much more than that would be unusual.
+  constexpr double REASONABLE_DEVIATION = 0.14;
+
+  // Population standard deviation.
+  const double square_sum = std::inner_product(data.begin(), data.end(), data.begin(), 0.0);
+  const double standard_deviation = std::sqrt(square_sum / data.size() - mean * mean);
+
+  return standard_deviation < REASONABLE_DEVIATION;
+}
+
+// Used to test for a miscalibrated stick so the user can be informed.
+bool IsPointOutsideCalibration(Common::DVec2 point, ControllerEmu::ReshapableInput& input)
+{
+  const double current_radius = point.Length();
+  const double input_radius =
+      input.GetInputRadiusAtAngle(std::atan2(point.y, point.x) + MathUtil::TAU);
+
+  constexpr double ALLOWED_ERROR = 1.3;
+
+  return current_radius > input_radius * ALLOWED_ERROR;
+}
+
 }  // namespace
 
 void MappingIndicator::DrawCursor(ControllerEmu::Cursor& cursor)
@@ -88,6 +139,8 @@ void MappingIndicator::DrawCursor(ControllerEmu::Cursor& cursor)
   const auto raw_coord = cursor.GetState(false);
   const auto adj_coord = cursor.GetState(true);
   Settings::Instance().SetControllerStateNeeded(false);
+
+  UpdateCalibrationWidget({raw_coord.x, raw_coord.y});
 
   // Bounding box size:
   const double scale = height() / 2.5;
@@ -106,6 +159,12 @@ void MappingIndicator::DrawCursor(ControllerEmu::Cursor& cursor)
   // Enable AA after drawing bounding box.
   p.setRenderHint(QPainter::Antialiasing, true);
   p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+  if (IsCalibrating())
+  {
+    DrawCalibration(p, {raw_coord.x, raw_coord.y});
+    return;
+  }
 
   // Deadzone for Z (forward/backward):
   const double deadzone = cursor.numeric_settings[cursor.SETTING_DEADZONE]->GetValue();
@@ -195,8 +254,22 @@ void MappingIndicator::DrawReshapableInput(ControllerEmu::ReshapableInput& stick
   // We should probably hold the mutex for UI updates.
   Settings::Instance().SetControllerStateNeeded(true);
   const auto raw_coord = stick.GetReshapableState(false);
-  const auto adj_coord = stick.GetReshapableState(true);
+
+  Common::DVec2 adj_coord;
+  if (is_tilt)
+  {
+    WiimoteEmu::EmulateTilt(&m_motion_state, static_cast<ControllerEmu::Tilt*>(&stick),
+                            1.f / INDICATOR_UPDATE_FREQ);
+    adj_coord = Common::DVec2{-m_motion_state.angle.y, m_motion_state.angle.x} / MathUtil::PI;
+  }
+  else
+  {
+    adj_coord = stick.GetReshapableState(true);
+  }
+
   Settings::Instance().SetControllerStateNeeded(false);
+
+  UpdateCalibrationWidget(raw_coord);
 
   // Bounding box size:
   const double scale = height() / 2.5;
@@ -215,6 +288,12 @@ void MappingIndicator::DrawReshapableInput(ControllerEmu::ReshapableInput& stick
   // Enable AA after drawing bounding box.
   p.setRenderHint(QPainter::Antialiasing, true);
   p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+  if (IsCalibrating())
+  {
+    DrawCalibration(p, raw_coord);
+    return;
+  }
 
   // Input gate. (i.e. the octagon shape)
   p.setPen(gate_pen_color);
@@ -345,6 +424,100 @@ void MappingIndicator::DrawMixedTriggers()
   }
 }
 
+void MappingIndicator::DrawForce(ControllerEmu::Force& force)
+{
+  const QColor gate_brush_color = SWING_GATE_COLOR;
+  const QColor gate_pen_color = gate_brush_color.darker(125);
+
+  // TODO: This SetControllerStateNeeded interface leaks input into the game
+  // We should probably hold the mutex for UI updates.
+  Settings::Instance().SetControllerStateNeeded(true);
+  const auto raw_coord = force.GetState(false);
+  WiimoteEmu::EmulateSwing(&m_motion_state, &force, 1.f / INDICATOR_UPDATE_FREQ);
+  const auto& adj_coord = m_motion_state.position;
+  Settings::Instance().SetControllerStateNeeded(false);
+
+  UpdateCalibrationWidget({raw_coord.x, raw_coord.y});
+
+  // Bounding box size:
+  const double scale = height() / 2.5;
+
+  QPainter p(this);
+  p.translate(width() / 2, height() / 2);
+
+  // Bounding box.
+  p.setBrush(BBOX_BRUSH_COLOR);
+  p.setPen(BBOX_PEN_COLOR);
+  p.drawRect(-scale - 1, -scale - 1, scale * 2 + 1, scale * 2 + 1);
+
+  // UI y-axis is opposite that of stick.
+  p.scale(1.0, -1.0);
+
+  // Enable AA after drawing bounding box.
+  p.setRenderHint(QPainter::Antialiasing, true);
+  p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+  if (IsCalibrating())
+  {
+    DrawCalibration(p, {raw_coord.x, raw_coord.y});
+    return;
+  }
+
+  // Deadzone for Z (forward/backward):
+  const double deadzone = force.numeric_settings[force.SETTING_DEADZONE]->GetValue();
+  if (deadzone > 0.0)
+  {
+    p.setPen(DEADZONE_COLOR);
+    p.setBrush(DEADZONE_BRUSH);
+    p.drawRect(QRectF(-scale, -deadzone * scale, scale * 2, deadzone * scale * 2));
+  }
+
+  // Raw Z:
+  p.setPen(Qt::NoPen);
+  p.setBrush(RAW_INPUT_COLOR);
+  p.drawRect(
+      QRectF(-scale, raw_coord.z * scale - INPUT_DOT_RADIUS / 2, scale * 2, INPUT_DOT_RADIUS));
+
+  // Adjusted Z:
+  if (adj_coord.y)
+  {
+    p.setBrush(ADJ_INPUT_COLOR);
+    p.drawRect(
+        QRectF(-scale, adj_coord.y * -scale - INPUT_DOT_RADIUS / 2, scale * 2, INPUT_DOT_RADIUS));
+  }
+
+  // Draw "gate" shape.
+  p.setPen(gate_pen_color);
+  p.setBrush(gate_brush_color);
+  p.drawPolygon(GetPolygonFromRadiusGetter(
+      [&force](double ang) { return force.GetGateRadiusAtAngle(ang); }, scale));
+
+  // Deadzone.
+  p.setPen(DEADZONE_COLOR);
+  p.setBrush(DEADZONE_BRUSH);
+  p.drawPolygon(GetPolygonFromRadiusGetter(
+      [&force](double ang) { return force.GetDeadzoneRadiusAtAngle(ang); }, scale));
+
+  // Input shape.
+  p.setPen(INPUT_SHAPE_PEN);
+  p.setBrush(Qt::NoBrush);
+  p.drawPolygon(GetPolygonFromRadiusGetter(
+      [&force](double ang) { return force.GetInputRadiusAtAngle(ang); }, scale));
+
+  // Raw stick position.
+  p.setPen(Qt::NoPen);
+  p.setBrush(RAW_INPUT_COLOR);
+  p.drawEllipse(QPointF{raw_coord.x, raw_coord.y} * scale, INPUT_DOT_RADIUS, INPUT_DOT_RADIUS);
+
+  // Adjusted position:
+  if (adj_coord.x || adj_coord.z)
+  {
+    p.setPen(Qt::NoPen);
+    p.setBrush(ADJ_INPUT_COLOR);
+    p.drawEllipse(QPointF{-adj_coord.x, adj_coord.z} * scale, INPUT_DOT_RADIUS, INPUT_DOT_RADIUS);
+  }
+}
+
 void MappingIndicator::paintEvent(QPaintEvent*)
 {
   switch (m_group->type)
@@ -359,7 +532,154 @@ void MappingIndicator::paintEvent(QPaintEvent*)
   case ControllerEmu::GroupType::MixedTriggers:
     DrawMixedTriggers();
     break;
+  case ControllerEmu::GroupType::Force:
+    DrawForce(*static_cast<ControllerEmu::Force*>(m_group));
+    break;
   default:
     break;
   }
+}
+
+void MappingIndicator::DrawCalibration(QPainter& p, Common::DVec2 point)
+{
+  // TODO: Ugly magic number used in a few places in this file.
+  const double scale = height() / 2.5;
+
+  // Input shape.
+  p.setPen(INPUT_SHAPE_PEN);
+  p.setBrush(Qt::NoBrush);
+  p.drawPolygon(GetPolygonFromRadiusGetter(
+      [this](double angle) { return m_calibration_widget->GetCalibrationRadiusAtAngle(angle); },
+      scale));
+
+  // Stick position.
+  p.setPen(Qt::NoPen);
+  p.setBrush(ADJ_INPUT_COLOR);
+  p.drawEllipse(QPointF{point.x, point.y} * scale, INPUT_DOT_RADIUS, INPUT_DOT_RADIUS);
+}
+
+void MappingIndicator::UpdateCalibrationWidget(Common::DVec2 point)
+{
+  if (m_calibration_widget)
+    m_calibration_widget->Update(point);
+}
+
+bool MappingIndicator::IsCalibrating() const
+{
+  return m_calibration_widget && m_calibration_widget->IsCalibrating();
+}
+
+void MappingIndicator::SetCalibrationWidget(CalibrationWidget* widget)
+{
+  m_calibration_widget = widget;
+}
+
+CalibrationWidget::CalibrationWidget(ControllerEmu::ReshapableInput& input,
+                                     MappingIndicator& indicator)
+    : m_input(input), m_indicator(indicator), m_completion_action{}
+{
+  m_indicator.SetCalibrationWidget(this);
+
+  // Make it more apparent that this is a menu with more options.
+  setPopupMode(ToolButtonPopupMode::MenuButtonPopup);
+
+  SetupActions();
+
+  setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Fixed);
+
+  m_informative_timer = new QTimer(this);
+  connect(m_informative_timer, &QTimer::timeout, this, [this] {
+    // If the user has started moving we'll assume they know what they are doing.
+    if (*std::max_element(m_calibration_data.begin(), m_calibration_data.end()) > 0.5)
+      return;
+
+    ModalMessageBox::information(
+        this, tr("Calibration"),
+        tr("For best results please slowly move your input to all possible regions."));
+  });
+  m_informative_timer->setSingleShot(true);
+}
+
+void CalibrationWidget::SetupActions()
+{
+  const auto calibrate_action = new QAction(tr("Calibrate"), this);
+  const auto reset_action = new QAction(tr("Reset"), this);
+
+  connect(calibrate_action, &QAction::triggered, [this]() { StartCalibration(); });
+  connect(reset_action, &QAction::triggered, [this]() { m_input.SetCalibrationToDefault(); });
+
+  for (auto* action : actions())
+    removeAction(action);
+
+  addAction(calibrate_action);
+  addAction(reset_action);
+  setDefaultAction(calibrate_action);
+
+  m_completion_action = new QAction(tr("Finish Calibration"), this);
+  connect(m_completion_action, &QAction::triggered, [this]() {
+    m_input.SetCalibrationData(std::move(m_calibration_data));
+    m_informative_timer->stop();
+    SetupActions();
+  });
+}
+
+void CalibrationWidget::StartCalibration()
+{
+  m_calibration_data.assign(m_input.CALIBRATION_SAMPLE_COUNT, 0.0);
+
+  // Cancel calibration.
+  const auto cancel_action = new QAction(tr("Cancel Calibration"), this);
+  connect(cancel_action, &QAction::triggered, [this]() {
+    m_calibration_data.clear();
+    m_informative_timer->stop();
+    SetupActions();
+  });
+
+  for (auto* action : actions())
+    removeAction(action);
+
+  addAction(cancel_action);
+  addAction(m_completion_action);
+  setDefaultAction(cancel_action);
+
+  // If the user doesn't seem to know what they are doing after a bit inform them.
+  m_informative_timer->start(2000);
+}
+
+void CalibrationWidget::Update(Common::DVec2 point)
+{
+  QFont f = parentWidget()->font();
+  QPalette p = parentWidget()->palette();
+
+  if (IsCalibrating())
+  {
+    m_input.UpdateCalibrationData(m_calibration_data, point);
+
+    if (IsCalibrationDataSensible(m_calibration_data))
+    {
+      setDefaultAction(m_completion_action);
+    }
+  }
+  else if (IsPointOutsideCalibration(point, m_input))
+  {
+    // Flashing bold and red on miscalibration.
+    if (QDateTime::currentDateTime().toMSecsSinceEpoch() % 500 < 350)
+    {
+      f.setBold(true);
+      p.setColor(QPalette::ButtonText, Qt::red);
+    }
+  }
+
+  setFont(f);
+  setPalette(p);
+}
+
+bool CalibrationWidget::IsCalibrating() const
+{
+  return !m_calibration_data.empty();
+}
+
+double CalibrationWidget::GetCalibrationRadiusAtAngle(double angle) const
+{
+  return m_input.GetCalibrationDataRadiusAtAngle(m_calibration_data, angle);
 }

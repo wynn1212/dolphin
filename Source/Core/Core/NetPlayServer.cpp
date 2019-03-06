@@ -49,7 +49,7 @@
 #include "Core/IOS/IOS.h"
 #include "Core/NetPlayClient.h"  //for NetPlayUI
 #include "DiscIO/Enums.h"
-#include "InputCommon/ControllerEmu/ControlGroup/Extension.h"
+#include "InputCommon/ControllerEmu/ControlGroup/Attachments.h"
 #include "InputCommon/GCPadStatus.h"
 #include "InputCommon/InputConfig.h"
 #include "UICommon/GameFile.h"
@@ -347,7 +347,7 @@ unsigned int NetPlayServer::OnConnect(ENetPeer* socket, sf::Packet& rpac)
   Send(player.socket, spac);
 
   // send new client the selected game
-  if (m_selected_game != "")
+  if (!m_selected_game.empty())
   {
     spac.clear();
     spac << static_cast<MessageId>(NP_MSG_CHANGE_GAME);
@@ -1115,7 +1115,7 @@ bool NetPlayServer::RequestStartGame()
     m_start_pending = true;
     if (!SyncCodes())
     {
-      PanicAlertT("Error synchronizing save gecko codes!");
+      PanicAlertT("Error synchronizing cheat codes!");
       m_start_pending = false;
       return false;
     }
@@ -1215,13 +1215,13 @@ bool NetPlayServer::StartGame()
   spac << m_settings.m_SyncCodes;
   spac << m_settings.m_SyncAllWiiSaves;
 
-  for (int i = 0; i < m_settings.m_WiimoteExtension.size(); i++)
+  for (size_t i = 0; i < m_settings.m_WiimoteExtension.size(); i++)
   {
     const int extension =
-        static_cast<ControllerEmu::Extension*>(
-            static_cast<WiimoteEmu::Wiimote*>(Wiimote::GetConfig()->GetController(i))
-                ->GetWiimoteGroup(WiimoteEmu::WiimoteGroup::Extension))
-            ->switch_extension;
+        static_cast<ControllerEmu::Attachments*>(
+            static_cast<WiimoteEmu::Wiimote*>(Wiimote::GetConfig()->GetController(int(i)))
+                ->GetWiimoteGroup(WiimoteEmu::WiimoteGroup::Attachments))
+            ->GetSelectedAttachment();
     spac << extension;
   }
 
