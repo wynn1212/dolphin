@@ -56,7 +56,6 @@
     <ClCompile Include="ConfigLoaders\MovieConfigLoader.cpp" />
     <ClCompile Include="ConfigLoaders\NetPlayConfigLoader.cpp" />
     <ClCompile Include="ConfigManager.cpp" />
-    <ClCompile Include="Config\WiimoteInputSettings.cpp" />
     <ClCompile Include="Core.cpp" />
     <ClCompile Include="CoreTiming.cpp" />
     <ClCompile Include="Debugger\Debugger_SymbolMap.cpp" />
@@ -257,6 +256,7 @@
     <ClCompile Include="PowerPC\BreakPoints.cpp" />
     <ClCompile Include="PowerPC\CachedInterpreter\CachedInterpreter.cpp" />
     <ClCompile Include="PowerPC\CachedInterpreter\InterpreterBlockCache.cpp" />
+    <ClCompile Include="PowerPC\ConditionRegister.cpp" />
     <ClCompile Include="PowerPC\Interpreter\Interpreter.cpp" />
     <ClCompile Include="PowerPC\Interpreter\Interpreter_Branch.cpp" />
     <ClCompile Include="PowerPC\Interpreter\Interpreter_FloatingPoint.cpp" />
@@ -326,7 +326,6 @@
     <ClInclude Include="ConfigLoaders\NetPlayConfigLoader.h" />
     <ClInclude Include="ConfigManager.h" />
     <ClInclude Include="Config\UISettings.h" />
-    <ClInclude Include="Config\WiimoteInputSettings.h" />
     <ClInclude Include="Core.h" />
     <ClInclude Include="CoreTiming.h" />
     <ClInclude Include="Debugger\Debugger_SymbolMap.h" />
@@ -520,6 +519,7 @@
     <ClInclude Include="PowerPC\Gekko.h" />
     <ClInclude Include="PowerPC\CachedInterpreter\CachedInterpreter.h" />
     <ClInclude Include="PowerPC\CachedInterpreter\InterpreterBlockCache.h" />
+    <ClInclude Include="PowerPC\ConditionRegister.h" />
     <ClInclude Include="PowerPC\Interpreter\ExceptionUtils.h" />
     <ClInclude Include="PowerPC\Interpreter\Interpreter.h" />
     <ClInclude Include="PowerPC\Interpreter\Interpreter_FPUtils.h" />

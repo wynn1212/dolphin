@@ -17,7 +17,6 @@ add_library(inputcommon
   ControllerEmu/ControlGroup/Slider.cpp
   ControllerEmu/ControlGroup/Tilt.cpp
   ControllerEmu/ControlGroup/Triggers.cpp
-  ControllerEmu/Setting/BooleanSetting.cpp
   ControllerEmu/Setting/NumericSetting.cpp
   ControllerInterface/ControllerInterface.cpp
   ControllerInterface/Device.cpp
@@ -35,6 +34,7 @@ if(WIN32)
     ControllerInterface/DInput/DInputJoystick.cpp
     ControllerInterface/DInput/DInputKeyboardMouse.cpp
     ControllerInterface/DInput/XInputFilter.cpp
+    ControllerInterface/Win32/Win32.cpp
     ControllerInterface/XInput/XInput.cpp
     ControllerInterface/ForceFeedback/ForceFeedbackDevice.cpp
   )

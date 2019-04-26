@@ -18,7 +18,6 @@
 #include "Core/HW/WiimoteReal/WiimoteReal.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Attachments.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ModifySettingsButton.h"
-#include "InputCommon/ControllerEmu/Setting/BooleanSetting.h"
 
 namespace WiimoteEmu
 {
@@ -150,11 +149,17 @@ void Wiimote::SendAck(OutputReportID rpt_id, ErrorCode error_code)
 
 void Wiimote::HandleExtensionSwap()
 {
+  if (WIIMOTE_BALANCE_BOARD == m_index)
+  {
+    // Prevent M+ or anything else silly from being attached to a balance board.
+    // In the future if we support an emulated balance board we can force the BB "extension" here.
+    return;
+  }
+
   ExtensionNumber desired_extension_number =
       static_cast<ExtensionNumber>(m_attachments->GetSelectedAttachment());
 
-  // const bool desired_motion_plus = m_motion_plus_setting->GetValue();
-  const bool desired_motion_plus = false;
+  const bool desired_motion_plus = m_motion_plus_setting.GetValue();
 
   // FYI: AttachExtension also connects devices to the i2c bus
 
@@ -233,7 +238,7 @@ void Wiimote::HandleRequestStatus(const OutputReportRequestStatus&)
   // Max battery level seems to be 0xc8 (decimal 200)
   constexpr u8 MAX_BATTERY_LEVEL = 0xc8;
 
-  m_status.battery = u8(std::lround(m_battery_setting->GetValue() * MAX_BATTERY_LEVEL));
+  m_status.battery = u8(std::lround(m_battery_setting.GetValue() / 100 * MAX_BATTERY_LEVEL));
 
   if (Core::WantsDeterminism())
   {
@@ -284,7 +289,7 @@ void Wiimote::HandleWriteData(const OutputReportWriteData& wd)
       if (address >= 0x0FCA && address < 0x12C0)
       {
         // TODO: Only write parts of the Mii block.
-        // TODO: Use fifferent files for different wiimote numbers.
+        // TODO: Use different files for different wiimote numbers.
         std::ofstream file;
         File::OpenFStream(file, File::GetUserPath(D_SESSION_WIIROOT_IDX) + "/mii.bin",
                           std::ios::binary | std::ios::out);
@@ -394,7 +399,7 @@ void Wiimote::HandleSpeakerData(const WiimoteCommon::OutputReportSpeakerData& rp
     else
     {
       // Speaker Pan
-      const auto pan = m_options->numeric_settings[0]->GetValue();
+      const auto pan = m_speaker_pan_setting.GetValue() / 100;
 
       m_speaker_logic.SpeakerData(rpt.data, rpt.length, pan);
     }
@@ -579,35 +584,24 @@ void Wiimote::DoState(PointerWrap& p)
   (m_is_motion_plus_attached ? m_motion_plus.GetExtPort() : m_extension_port)
       .AttachExtension(GetActiveExtension());
 
-  m_motion_plus.DoState(p);
-  GetActiveExtension()->DoState(p);
+  if (m_is_motion_plus_attached)
+    m_motion_plus.DoState(p);
+
+  if (m_active_extension != ExtensionNumber::NONE)
+    GetActiveExtension()->DoState(p);
 
   // Dynamics
   p.Do(m_swing_state);
   p.Do(m_tilt_state);
-
-  // TODO: clean this up:
-  p.Do(m_shake_step);
+  p.Do(m_cursor_state);
+  p.Do(m_shake_state);
 
   p.DoMarker("Wiimote");
-
-  if (p.GetMode() == PointerWrap::MODE_READ)
-    RealState();
 }
 
 ExtensionNumber Wiimote::GetActiveExtensionNumber() const
 {
   return m_active_extension;
-}
-
-void Wiimote::RealState()
-{
-  using namespace WiimoteReal;
-
-  if (g_wiimotes[m_index])
-  {
-    g_wiimotes[m_index]->SetChannel(m_reporting_channel);
-  }
 }
 
 }  // namespace WiimoteEmu

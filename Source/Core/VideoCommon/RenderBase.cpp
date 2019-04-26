@@ -37,6 +37,7 @@
 #include "Common/Timer.h"
 
 #include "Core/Analytics.h"
+#include "Core/Config/NetplaySettings.h"
 #include "Core/Config/SYSCONFSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -57,6 +58,8 @@
 #include "VideoCommon/FPSCounter.h"
 #include "VideoCommon/FramebufferManager.h"
 #include "VideoCommon/ImageWrite.h"
+#include "VideoCommon/NetPlayChatUI.h"
+#include "VideoCommon/NetPlayGolfUI.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/PixelEngine.h"
 #include "VideoCommon/PixelShaderManager.h"
@@ -150,8 +153,13 @@ std::unique_ptr<AbstractShader> Renderer::CreateShaderFromSource(ShaderStage sta
   return CreateShaderFromSource(stage, source.c_str(), source.size());
 }
 
-void Renderer::ClearScreen(const EFBRectangle& rc, bool colorEnable, bool alphaEnable, bool zEnable,
-                           u32 color, u32 z)
+bool Renderer::EFBHasAlphaChannel() const
+{
+  return m_prev_efb_format == PEControl::RGBA6_Z24;
+}
+
+void Renderer::ClearScreen(const MathUtil::Rectangle<int>& rc, bool colorEnable, bool alphaEnable,
+                           bool zEnable, u32 color, u32 z)
 {
   g_framebuffer_manager->ClearEFB(rc, colorEnable, alphaEnable, zEnable, color, z);
 }
@@ -250,8 +258,8 @@ void Renderer::PokeEFB(EFBAccessType type, const EfbPokeData* points, size_t num
   }
 }
 
-void Renderer::RenderToXFB(u32 xfbAddr, const EFBRectangle& sourceRc, u32 fbStride, u32 fbHeight,
-                           float Gamma)
+void Renderer::RenderToXFB(u32 xfbAddr, const MathUtil::Rectangle<int>& sourceRc, u32 fbStride,
+                           u32 fbHeight, float Gamma)
 {
   CheckFifoRecording();
 
@@ -324,11 +332,11 @@ bool Renderer::CalculateTargetSize()
   return false;
 }
 
-std::tuple<TargetRectangle, TargetRectangle>
-Renderer::ConvertStereoRectangle(const TargetRectangle& rc) const
+std::tuple<MathUtil::Rectangle<int>, MathUtil::Rectangle<int>>
+Renderer::ConvertStereoRectangle(const MathUtil::Rectangle<int>& rc) const
 {
   // Resize target to half its original size
-  TargetRectangle draw_rc = rc;
+  auto draw_rc = rc;
   if (g_ActiveConfig.stereo_mode == StereoMode::TAB)
   {
     // The height may be negative due to flipped rectangles
@@ -344,8 +352,8 @@ Renderer::ConvertStereoRectangle(const TargetRectangle& rc) const
   }
 
   // Create two target rectangle offset to the sides of the backbuffer
-  TargetRectangle left_rc = draw_rc;
-  TargetRectangle right_rc = draw_rc;
+  auto left_rc = draw_rc;
+  auto right_rc = draw_rc;
   if (g_ActiveConfig.stereo_mode == StereoMode::TAB)
   {
     left_rc.top -= m_backbuffer_height / 4;
@@ -386,6 +394,7 @@ void Renderer::CheckForConfigChanges()
   const StereoMode old_stereo = g_ActiveConfig.stereo_mode;
   const u32 old_multisamples = g_ActiveConfig.iMultisamples;
   const int old_anisotropy = g_ActiveConfig.iMaxAnisotropy;
+  const int old_efb_access_tile_size = g_ActiveConfig.iEFBAccessTileSize;
   const bool old_force_filtering = g_ActiveConfig.bForceFiltering;
   const bool old_vsync = g_ActiveConfig.bVSyncActive;
   const bool old_bbox = g_ActiveConfig.bBBoxEnable;
@@ -394,6 +403,10 @@ void Renderer::CheckForConfigChanges()
 
   // Update texture cache settings with any changed options.
   g_texture_cache->OnConfigChanged(g_ActiveConfig);
+
+  // EFB tile cache doesn't need to notify the backend.
+  if (old_efb_access_tile_size != g_ActiveConfig.iEFBAccessTileSize)
+    g_framebuffer_manager->SetEFBCacheTileSize(std::max(g_ActiveConfig.iEFBAccessTileSize, 0));
 
   // Check for post-processing shader changes. Done up here as it doesn't affect anything outside
   // the post-processor. Note that options are applied every frame, so no need to check those.
@@ -518,6 +531,12 @@ void Renderer::DrawDebugText()
   if (g_ActiveConfig.bOverlayStats)
     Statistics::Display();
 
+  if (g_ActiveConfig.bShowNetPlayMessages && g_netplay_chat_ui)
+    g_netplay_chat_ui->Display();
+
+  if (Config::Get(Config::NETPLAY_GOLF_MODE_OVERLAY) && g_netplay_golf_ui)
+    g_netplay_golf_ui->Display();
+
   if (g_ActiveConfig.bOverlayProjStats)
     Statistics::DisplayProj();
 }
@@ -630,9 +649,9 @@ MathUtil::Rectangle<int> Renderer::ConvertFramebufferRectangle(const MathUtil::R
   return ret;
 }
 
-TargetRectangle Renderer::ConvertEFBRectangle(const EFBRectangle& rc)
+MathUtil::Rectangle<int> Renderer::ConvertEFBRectangle(const MathUtil::Rectangle<int>& rc)
 {
-  TargetRectangle result;
+  MathUtil::Rectangle<int> result;
   result.left = EFBToScaledX(rc.left);
   result.top = EFBToScaledY(rc.top);
   result.right = EFBToScaledX(rc.right);
@@ -974,8 +993,7 @@ bool Renderer::InitializeImGui()
   pconfig.vertex_format = m_imgui_vertex_format.get();
   pconfig.vertex_shader = vertex_shader.get();
   pconfig.pixel_shader = pixel_shader.get();
-  pconfig.rasterization_state =
-      RenderState::GetCullBackFaceRasterizationState(PrimitiveType::Triangles);
+  pconfig.rasterization_state = RenderState::GetNoCullRasterizationState(PrimitiveType::Triangles);
   pconfig.depth_state = RenderState::GetNoDepthTestingDepthState();
   pconfig.blending_state = RenderState::GetNoBlendingBlendState();
   pconfig.blending_state.blendenable = true;
@@ -1136,8 +1154,7 @@ void Renderer::EndUIFrame()
   BeginImGuiFrame();
 }
 
-void Renderer::Swap(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const EFBRectangle& rc,
-                    u64 ticks)
+void Renderer::Swap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u64 ticks)
 {
   const AspectMode suggested = g_ActiveConfig.suggested_aspect_mode;
   if (suggested == AspectMode::Analog || suggested == AspectMode::AnalogWide)
@@ -1170,33 +1187,15 @@ void Renderer::Swap(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const 
   // behind the renderer.
   FlushFrameDump();
 
-  if (xfbAddr && fbWidth && fbStride && fbHeight)
+  if (xfb_addr && fb_width && fb_stride && fb_height)
   {
-    constexpr int force_safe_texture_cache_hash = 0;
     // Get the current XFB from texture cache
-    auto* xfb_entry = g_texture_cache->GetXFBTexture(
-        xfbAddr, fbStride, fbHeight, TextureFormat::XFB, force_safe_texture_cache_hash);
-
+    MathUtil::Rectangle<int> xfb_rect;
+    const auto* xfb_entry =
+        g_texture_cache->GetXFBTexture(xfb_addr, fb_width, fb_height, fb_stride, &xfb_rect);
     if (xfb_entry && xfb_entry->id != m_last_xfb_id)
     {
-      const TextureConfig& texture_config = xfb_entry->texture->GetConfig();
-      m_last_xfb_texture = xfb_entry->texture.get();
       m_last_xfb_id = xfb_entry->id;
-      m_last_xfb_ticks = ticks;
-
-      auto xfb_rect = texture_config.GetRect();
-
-      // It's possible that the returned XFB texture is native resolution
-      // even when we're rendering at higher than native resolution
-      // if the XFB was was loaded entirely from console memory.
-      // If so, adjust the rectangle by native resolution instead of scaled resolution.
-      const u32 native_stride_width_difference = fbStride - fbWidth;
-      if (texture_config.width == xfb_entry->native_width)
-        xfb_rect.right -= native_stride_width_difference;
-      else
-        xfb_rect.right -= EFBToScaledX(native_stride_width_difference);
-
-      m_last_xfb_region = xfb_rect;
 
       // Since we use the common pipelines here and draw vertices if a batch is currently being
       // built by the vertex loader, we end up trampling over its pointer, as we share the buffer
@@ -1229,7 +1228,7 @@ void Renderer::Swap(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const 
 
         // Update the window size based on the frame that was just rendered.
         // Due to depending on guest state, we need to call this every frame.
-        SetWindowSize(texture_config.width, texture_config.height);
+        SetWindowSize(xfb_rect.GetWidth(), xfb_rect.GetHeight());
       }
 
       m_fps_counter.Update();
@@ -1241,7 +1240,7 @@ void Renderer::Swap(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const 
       DolphinAnalytics::Instance()->ReportPerformanceInfo(std::move(perf_sample));
 
       if (IsFrameDumping())
-        DumpCurrentFrame();
+        DumpCurrentFrame(xfb_entry->texture.get(), xfb_rect, ticks);
 
       // Begin new frame
       m_frame_count++;
@@ -1277,8 +1276,8 @@ void Renderer::Swap(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const 
     }
 
     // Update our last xfb values
-    m_last_xfb_width = (fbStride < 1 || fbStride > MAX_XFB_WIDTH) ? MAX_XFB_WIDTH : fbStride;
-    m_last_xfb_height = (fbHeight < 1 || fbHeight > MAX_XFB_HEIGHT) ? MAX_XFB_HEIGHT : fbHeight;
+    m_last_xfb_width = (fb_width < 1 || fb_width > MAX_XFB_WIDTH) ? MAX_XFB_WIDTH : fb_width;
+    m_last_xfb_height = (fb_height < 1 || fb_height > MAX_XFB_HEIGHT) ? MAX_XFB_HEIGHT : fb_height;
   }
   else
   {
@@ -1286,13 +1285,13 @@ void Renderer::Swap(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const 
   }
 }
 
-void Renderer::RenderXFBToScreen(const AbstractTexture* texture, const EFBRectangle& rc)
+void Renderer::RenderXFBToScreen(const AbstractTexture* texture, const MathUtil::Rectangle<int>& rc)
 {
   const auto target_rc = GetTargetRectangle();
   if (g_ActiveConfig.stereo_mode == StereoMode::SBS ||
       g_ActiveConfig.stereo_mode == StereoMode::TAB)
   {
-    TargetRectangle left_rc, right_rc;
+    MathUtil::Rectangle<int> left_rc, right_rc;
     std::tie(left_rc, right_rc) = ConvertStereoRectangle(target_rc);
 
     m_post_processor->BlitFromTexture(left_rc, rc, texture, 0);
@@ -1315,8 +1314,11 @@ bool Renderer::IsFrameDumping()
   return false;
 }
 
-void Renderer::DumpCurrentFrame()
+void Renderer::DumpCurrentFrame(const AbstractTexture* src_texture,
+                                const MathUtil::Rectangle<int>& src_rect, u64 ticks)
 {
+  int source_width = src_rect.GetWidth();
+  int source_height = src_rect.GetHeight();
   int target_width, target_height;
   if (!g_ActiveConfig.bInternalResolutionFrameDumps && !IsHeadless())
   {
@@ -1326,22 +1328,20 @@ void Renderer::DumpCurrentFrame()
   }
   else
   {
-    std::tie(target_width, target_height) = CalculateOutputDimensions(
-        m_last_xfb_texture->GetConfig().width, m_last_xfb_texture->GetConfig().height);
+    std::tie(target_width, target_height) = CalculateOutputDimensions(source_width, source_height);
   }
 
   // We only need to render a copy if we need to stretch/scale the XFB copy.
-  const AbstractTexture* source_tex = m_last_xfb_texture;
-  MathUtil::Rectangle<int> source_rect = m_last_xfb_region;
-  if (source_rect.GetWidth() != target_width || source_rect.GetHeight() != target_height)
+  MathUtil::Rectangle<int> copy_rect = src_rect;
+  if (source_width != target_width || source_height != target_height)
   {
     if (!CheckFrameDumpRenderTexture(target_width, target_height))
       return;
 
-    source_tex = m_frame_dump_render_texture.get();
-    source_rect = MathUtil::Rectangle<int>(0, 0, target_width, target_height);
-    ScaleTexture(m_frame_dump_render_framebuffer.get(), source_rect, m_last_xfb_texture,
-                 m_last_xfb_region);
+    ScaleTexture(m_frame_dump_render_framebuffer.get(), m_frame_dump_render_framebuffer->GetRect(),
+                 src_texture, src_rect);
+    src_texture = m_frame_dump_render_texture.get();
+    copy_rect = src_texture->GetRect();
   }
 
   // Index 0 was just sent to AVI dump. Swap with the second texture.
@@ -1351,12 +1351,9 @@ void Renderer::DumpCurrentFrame()
   if (!CheckFrameDumpReadbackTexture(target_width, target_height))
     return;
 
-  const auto converted_region =
-      ConvertFramebufferRectangle(source_rect, source_tex->GetWidth(), source_tex->GetHeight());
-  m_frame_dump_readback_textures[0]->CopyFromTexture(
-      source_tex, converted_region, 0, 0,
-      MathUtil::Rectangle<int>(0, 0, target_width, target_height));
-  m_last_frame_state = AVIDump::FetchState(m_last_xfb_ticks);
+  m_frame_dump_readback_textures[0]->CopyFromTexture(src_texture, copy_rect, 0, 0,
+                                                     m_frame_dump_readback_textures[0]->GetRect());
+  m_last_frame_state = AVIDump::FetchState(ticks);
   m_last_frame_exported = true;
 }
 

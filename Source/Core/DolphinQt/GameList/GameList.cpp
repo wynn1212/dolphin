@@ -28,6 +28,7 @@
 
 #include "Common/FileUtil.h"
 
+#include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HW/DVD/DVDInterface.h"
@@ -195,7 +196,7 @@ void GameList::MakeEmptyView()
                       "Double-click here to set a games directory..."));
   m_empty->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
 
-  auto event_filter = new DoubleClickEventFilter{};
+  auto event_filter = new DoubleClickEventFilter{m_empty};
   m_empty->installEventFilter(event_filter);
   connect(event_filter, &DoubleClickEventFilter::doubleClicked, [this] {
     auto current_dir = QDir::currentPath();
@@ -272,19 +273,19 @@ void GameList::ShowContextMenu(const QPoint&)
     }
 
     if (compress)
-      menu->addAction(tr("Compress selected ISOs..."), this, [this] { CompressISO(false); });
+      menu->addAction(tr("Compress Selected ISOs..."), this, [this] { CompressISO(false); });
     if (decompress)
-      menu->addAction(tr("Decompress selected ISOs..."), this, [this] { CompressISO(true); });
+      menu->addAction(tr("Decompress Selected ISOs..."), this, [this] { CompressISO(true); });
     if (compress || decompress)
       menu->addSeparator();
 
     if (wii_saves)
     {
-      menu->addAction(tr("Export Wii saves (Experimental)"), this, &GameList::ExportWiiSave);
+      menu->addAction(tr("Export Wii Saves (Experimental)"), this, &GameList::ExportWiiSave);
       menu->addSeparator();
     }
 
-    menu->addAction(tr("Delete selected files..."), this, &GameList::DeleteFile);
+    menu->addAction(tr("Delete Selected Files..."), this, &GameList::DeleteFile);
   }
   else
   {
@@ -301,7 +302,7 @@ void GameList::ShowContextMenu(const QPoint&)
 
     if (platform == DiscIO::Platform::GameCubeDisc || platform == DiscIO::Platform::WiiDisc)
     {
-      menu->addAction(tr("Set as &default ISO"), this, &GameList::SetDefaultISO);
+      menu->addAction(tr("Set as &Default ISO"), this, &GameList::SetDefaultISO);
       const auto blob_type = game->GetBlobType();
 
       if (blob_type == DiscIO::BlobType::GCZ)
@@ -355,12 +356,18 @@ void GameList::ShowContextMenu(const QPoint&)
 
     if (platform == DiscIO::Platform::WiiWAD || platform == DiscIO::Platform::WiiDisc)
     {
-      menu->addAction(tr("Open Wii &save folder"), this, &GameList::OpenSaveFolder);
-      menu->addAction(tr("Export Wii save (Experimental)"), this, &GameList::ExportWiiSave);
+      menu->addAction(tr("Open Wii &Save Folder"), this, &GameList::OpenWiiSaveFolder);
+      menu->addAction(tr("Export Wii Save (Experimental)"), this, &GameList::ExportWiiSave);
       menu->addSeparator();
     }
 
-    menu->addAction(tr("Open &containing folder"), this, &GameList::OpenContainingFolder);
+    if (platform == DiscIO::Platform::GameCubeDisc)
+    {
+      menu->addAction(tr("Open GameCube &Save Folder"), this, &GameList::OpenGCSaveFolder);
+      menu->addSeparator();
+    }
+
+    menu->addAction(tr("Open &Containing Folder"), this, &GameList::OpenContainingFolder);
     menu->addAction(tr("Delete File..."), this, &GameList::DeleteFile);
 
     menu->addSeparator();
@@ -665,7 +672,7 @@ void GameList::OpenContainingFolder()
   QDesktopServices::openUrl(url);
 }
 
-void GameList::OpenSaveFolder()
+void GameList::OpenWiiSaveFolder()
 {
   const auto game = GetSelectedGame();
   if (!game)
@@ -673,6 +680,63 @@ void GameList::OpenSaveFolder()
 
   QUrl url = QUrl::fromLocalFile(QString::fromStdString(game->GetWiiFSPath()));
   QDesktopServices::openUrl(url);
+}
+
+void GameList::OpenGCSaveFolder()
+{
+  const auto game = GetSelectedGame();
+  if (!game)
+    return;
+
+  bool found = false;
+
+  for (int i = 0; i < 2; i++)
+  {
+    QUrl url;
+    switch (SConfig::GetInstance().m_EXIDevice[i])
+    {
+    case ExpansionInterface::EXIDEVICE_MEMORYCARDFOLDER:
+    {
+      std::string path = StringFromFormat("%s/%s/%s", File::GetUserPath(D_GCUSER_IDX).c_str(),
+                                          SConfig::GetDirectoryForRegion(game->GetRegion()),
+                                          i == 0 ? "Card A" : "Card B");
+
+      std::string override_path = i == 0 ? Config::Get(Config::MAIN_GCI_FOLDER_A_PATH_OVERRIDE) :
+                                           Config::Get(Config::MAIN_GCI_FOLDER_B_PATH_OVERRIDE);
+
+      if (!override_path.empty())
+        path = override_path;
+
+      QDir dir(QString::fromStdString(path));
+
+      if (!dir.entryList({QStringLiteral("%1-%2-*.gci")
+                              .arg(QString::fromStdString(game->GetMakerID()))
+                              .arg(QString::fromStdString(game->GetGameID().substr(0, 4)))})
+               .empty())
+      {
+        url = QUrl::fromLocalFile(dir.absolutePath());
+      }
+      break;
+    }
+    case ExpansionInterface::EXIDEVICE_MEMORYCARD:
+      std::string memcard_path = i == 0 ? Config::Get(Config::MAIN_MEMCARD_A_PATH) :
+                                          Config::Get(Config::MAIN_MEMCARD_B_PATH);
+
+      std::string memcard_dir;
+
+      SplitPath(memcard_path, &memcard_dir, nullptr, nullptr);
+      url = QUrl::fromLocalFile(QString::fromStdString(memcard_dir));
+      break;
+    }
+
+    found |= !url.isEmpty();
+
+    if (!url.isEmpty())
+      QDesktopServices::openUrl(url);
+  }
+
+  if (!found)
+    ModalMessageBox::information(this, tr("Information"), tr("No save data found."));
 }
 
 void GameList::DeleteFile()

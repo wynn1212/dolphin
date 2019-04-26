@@ -63,7 +63,8 @@ class MainWindow final : public QMainWindow
   Q_OBJECT
 
 public:
-  explicit MainWindow(std::unique_ptr<BootParameters> boot_parameters);
+  explicit MainWindow(std::unique_ptr<BootParameters> boot_parameters,
+                      const std::string& movie_path);
   ~MainWindow();
 
   void Show();
@@ -147,6 +148,7 @@ private:
   void ShowAboutDialog();
   void ShowHotkeyDialog();
   void ShowNetPlaySetupDialog();
+  void ShowNetPlayBrowser();
   void ShowFIFOPlayer();
   void ShowMemcardManager();
   void ShowResourcePackManager();
@@ -168,6 +170,8 @@ private:
   void OnStartRecording();
   void OnStopRecording();
   void OnExportRecording();
+  void OnActivateChat();
+  void OnRequestGolfControl();
   void ShowTASInput();
 
   void ChangeDisc();

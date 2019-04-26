@@ -16,6 +16,7 @@
 #include "Common/Flag.h"
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
+#include "Common/ScopeGuard.h"
 #include "Common/StringUtil.h"
 #include "Common/Thread.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -40,10 +41,14 @@ static void HotplugThreadFunc()
   NOTICE_LOG(SERIALINTERFACE, "evdev hotplug thread started");
 
   udev* const udev = udev_new();
+  Common::ScopeGuard udev_guard([udev] { udev_unref(udev); });
+
   ASSERT_MSG(PAD, udev != nullptr, "Couldn't initialize libudev.");
 
   // Set up monitoring
   udev_monitor* const monitor = udev_monitor_new_from_netlink(udev, "udev");
+  Common::ScopeGuard monitor_guard([monitor] { udev_monitor_unref(monitor); });
+
   udev_monitor_filter_add_match_subsystem_devtype(monitor, "input", nullptr);
   udev_monitor_enable_receiving(monitor);
   const int monitor_fd = udev_monitor_get_fd(monitor);
@@ -61,11 +66,11 @@ static void HotplugThreadFunc()
     if (ret < 1 || !FD_ISSET(monitor_fd, &fds))
       continue;
 
-    std::unique_ptr<udev_device, decltype(&udev_device_unref)> dev{
-        udev_monitor_receive_device(monitor), udev_device_unref};
+    udev_device* const dev = udev_monitor_receive_device(monitor);
+    Common::ScopeGuard dev_guard([dev] { udev_device_unref(dev); });
 
-    const char* const action = udev_device_get_action(dev.get());
-    const char* const devnode = udev_device_get_devnode(dev.get());
+    const char* const action = udev_device_get_action(dev);
+    const char* const devnode = udev_device_get_devnode(dev);
     if (!devnode)
       continue;
 
@@ -251,8 +256,8 @@ evdevDevice::evdevDevice(const std::string& devnode) : m_devfile(devnode)
   // Rumble (i.e. Left/Right) (i.e. Strong/Weak) effect
   if (libevdev_has_event_code(m_dev, EV_FF, FF_RUMBLE))
   {
-    AddOutput(new RumbleEffect(m_fd, RumbleEffect::Motor::STRONG));
-    AddOutput(new RumbleEffect(m_fd, RumbleEffect::Motor::WEAK));
+    AddOutput(new RumbleEffect(m_fd, RumbleEffect::Motor::Strong));
+    AddOutput(new RumbleEffect(m_fd, RumbleEffect::Motor::Weak));
   }
 
   // TODO: Add leds as output devices
@@ -343,7 +348,7 @@ ControlState evdevDevice::Axis::GetState() const
   int value = 0;
   libevdev_fetch_event_value(m_dev, EV_ABS, m_code, &value);
 
-  return std::max(0.0, ControlState(value - m_base) / m_range);
+  return ControlState(value - m_base) / m_range;
 }
 
 evdevDevice::Effect::Effect(int fd) : m_fd(fd)
@@ -383,7 +388,7 @@ std::string evdevDevice::PeriodicEffect::GetName() const
 
 std::string evdevDevice::RumbleEffect::GetName() const
 {
-  return (Motor::STRONG == m_motor) ? "Strong" : "Weak";
+  return (Motor::Strong == m_motor) ? "Strong" : "Weak";
 }
 
 void evdevDevice::Effect::SetState(ControlState state)
@@ -477,7 +482,7 @@ bool evdevDevice::PeriodicEffect::UpdateParameters(ControlState state)
 
 bool evdevDevice::RumbleEffect::UpdateParameters(ControlState state)
 {
-  u16& value = (Motor::STRONG == m_motor) ? m_effect.u.rumble.strong_magnitude :
+  u16& value = (Motor::Strong == m_motor) ? m_effect.u.rumble.strong_magnitude :
                                             m_effect.u.rumble.weak_magnitude;
   const u16 old_value = value;
 

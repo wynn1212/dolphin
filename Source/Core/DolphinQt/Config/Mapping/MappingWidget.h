@@ -13,11 +13,9 @@
 class ControlGroupBox;
 class InputConfig;
 class IOWindow;
-class MappingBool;
 class MappingButton;
 class MappingNumeric;
 class MappingWindow;
-class MappingRadio;
 class QGroupBox;
 
 namespace ControllerEmu
@@ -35,6 +33,8 @@ class Device;
 }
 }  // namespace ciface
 
+constexpr int INDICATOR_UPDATE_FREQ = 30;
+
 class MappingWidget : public QWidget
 {
   Q_OBJECT
@@ -42,18 +42,16 @@ public:
   explicit MappingWidget(MappingWindow* window);
 
   ControllerEmu::EmulatedController* GetController() const;
-  std::shared_ptr<ciface::Core::Device> GetDevice() const;
 
   MappingWindow* GetParent() const;
-
-  bool IsIterativeInput() const;
-  void NextButton(MappingButton* button);
 
   virtual void LoadSettings() = 0;
   virtual void SaveSettings() = 0;
   virtual InputConfig* GetConfig() = 0;
 
+signals:
   void Update();
+  void ConfigChanged();
 
 protected:
   int GetPort() const;
@@ -62,8 +60,5 @@ protected:
 private:
   MappingWindow* m_parent;
   bool m_first = true;
-  std::vector<MappingBool*> m_bools;
-  std::vector<MappingRadio*> m_radio;
   std::vector<MappingButton*> m_buttons;
-  std::vector<MappingNumeric*> m_numerics;
 };
