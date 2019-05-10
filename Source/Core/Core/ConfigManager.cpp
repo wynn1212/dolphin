@@ -35,6 +35,7 @@
 #include "Core/HLE/HLE.h"
 #include "Core/HW/DVD/DVDInterface.h"
 #include "Core/HW/SI/SI.h"
+#include "Core/Host.h"
 #include "Core/IOS/ES/ES.h"
 #include "Core/IOS/ES/Formats.h"
 #include "Core/PatchEngine.h"
@@ -646,7 +647,7 @@ void SConfig::LoadJitDebugSettings(IniFile& ini)
 
 void SConfig::ResetRunningGameMetadata()
 {
-  SetRunningGameMetadata("00000000", "", 0, 0);
+  SetRunningGameMetadata("00000000", "", 0, 0, DiscIO::Country::Unknown);
 }
 
 void SConfig::SetRunningGameMetadata(const DiscIO::Volume& volume,
@@ -655,13 +656,14 @@ void SConfig::SetRunningGameMetadata(const DiscIO::Volume& volume,
   if (partition == volume.GetGamePartition())
   {
     SetRunningGameMetadata(volume.GetGameID(), volume.GetGameTDBID(),
-                           volume.GetTitleID().value_or(0), volume.GetRevision().value_or(0));
+                           volume.GetTitleID().value_or(0), volume.GetRevision().value_or(0),
+                           volume.GetCountry());
   }
   else
   {
     SetRunningGameMetadata(volume.GetGameID(partition), volume.GetGameTDBID(),
                            volume.GetTitleID(partition).value_or(0),
-                           volume.GetRevision(partition).value_or(0));
+                           volume.GetRevision(partition).value_or(0), volume.GetCountry());
   }
 }
 
@@ -676,13 +678,16 @@ void SConfig::SetRunningGameMetadata(const IOS::ES::TMDReader& tmd)
   if (!DVDInterface::UpdateRunningGameMetadata(tmd_title_id))
   {
     // If not launching a disc game, just read everything from the TMD.
-    SetRunningGameMetadata(tmd.GetGameID(), tmd.GetGameTDBID(), tmd_title_id,
-                           tmd.GetTitleVersion());
+    const DiscIO::Country country =
+        DiscIO::CountryCodeToCountry(static_cast<u8>(tmd_title_id), DiscIO::Platform::WiiWAD,
+                                     tmd.GetRegion(), tmd.GetTitleVersion());
+    SetRunningGameMetadata(tmd.GetGameID(), tmd.GetGameTDBID(), tmd_title_id, tmd.GetTitleVersion(),
+                           country);
   }
 }
 
 void SConfig::SetRunningGameMetadata(const std::string& game_id, const std::string& gametdb_id,
-                                     u64 title_id, u16 revision)
+                                     u64 title_id, u16 revision, DiscIO::Country country)
 {
   const bool was_changed = m_game_id != game_id || m_gametdb_id != gametdb_id ||
                            m_title_id != title_id || m_revision != revision;
@@ -715,7 +720,10 @@ void SConfig::SetRunningGameMetadata(const std::string& game_id, const std::stri
   }
 
   const Core::TitleDatabase title_database;
-  m_title_description = title_database.Describe(m_gametdb_id, GetCurrentLanguage(bWii));
+  const DiscIO::Language language = !bWii && country == DiscIO::Country::Japan ?
+                                        DiscIO::Language::Japanese :
+                                        GetCurrentLanguage(bWii);
+  m_title_description = title_database.Describe(m_gametdb_id, language);
   NOTICE_LOG(CORE, "Active title: %s", m_title_description.c_str());
 
   Config::AddLayer(ConfigLoaders::GenerateGlobalGameConfigLoader(game_id, revision));
@@ -724,7 +732,11 @@ void SConfig::SetRunningGameMetadata(const std::string& game_id, const std::stri
   if (Core::IsRunning())
   {
     // TODO: have a callback mechanism for title changes?
-    g_symbolDB.Clear();
+    if (!g_symbolDB.IsEmpty())
+    {
+      g_symbolDB.Clear();
+      Host_NotifyMapLoaded();
+    }
     CBoot::LoadMapFromFilename();
     HLE::Reload();
     PatchEngine::Reload();

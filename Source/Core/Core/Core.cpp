@@ -32,16 +32,11 @@
 #include "Common/Timer.h"
 
 #include "Core/Analytics.h"
+#include "Core/Boot/Boot.h"
 #include "Core/BootManager.h"
 #include "Core/ConfigManager.h"
 #include "Core/CoreTiming.h"
 #include "Core/DSPEmulator.h"
-#include "Core/Host.h"
-#include "Core/MemTools.h"
-#ifdef USE_MEMORYWATCHER
-#include "Core/MemoryWatcher.h"
-#endif
-#include "Core/Boot/Boot.h"
 #include "Core/FifoPlayer/FifoPlayer.h"
 #include "Core/HLE/HLE.h"
 #include "Core/HW/CPU.h"
@@ -53,7 +48,9 @@
 #include "Core/HW/SystemTimers.h"
 #include "Core/HW/VideoInterface.h"
 #include "Core/HW/Wiimote.h"
+#include "Core/Host.h"
 #include "Core/IOS/IOS.h"
+#include "Core/MemTools.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
@@ -65,6 +62,10 @@
 
 #ifdef USE_GDBSTUB
 #include "Core/PowerPC/GDBStub.h"
+#endif
+
+#ifdef USE_MEMORYWATCHER
+#include "Core/MemoryWatcher.h"
 #endif
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -97,6 +98,10 @@ static bool s_request_refresh_info = false;
 static bool s_is_throttler_temp_disabled = false;
 static bool s_frame_step = false;
 
+#ifdef USE_MEMORYWATCHER
+static std::unique_ptr<MemoryWatcher> s_memory_watcher;
+#endif
+
 struct HostJob
 {
   std::function<void()> job;
@@ -123,6 +128,13 @@ void FrameUpdateOnCPUThread()
 {
   if (NetPlay::IsNetPlayRunning())
     NetPlay::NetPlayClient::SendTimeBase();
+}
+
+void OnFrameEnd()
+{
+#ifdef USE_MEMORYWATCHER
+  s_memory_watcher->Step();
+#endif
 }
 
 // Display messages and return values
@@ -271,7 +283,7 @@ void Stop()  // - Hammertime!
   ResetRumble();
 
 #ifdef USE_MEMORYWATCHER
-  MemoryWatcher::Shutdown();
+  s_memory_watcher.reset();
 #endif
 }
 
@@ -316,7 +328,7 @@ static void CpuThread(const std::optional<std::string>& savestate_path, bool del
     EMM::InstallExceptionHandler();  // Let's run under memory watch
 
 #ifdef USE_MEMORYWATCHER
-  MemoryWatcher::Init();
+  s_memory_watcher = std::make_unique<MemoryWatcher>();
 #endif
 
   if (savestate_path)

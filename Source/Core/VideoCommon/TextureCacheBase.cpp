@@ -556,7 +556,7 @@ static void SetSamplerState(u32 index, float custom_tex_scale, bool custom_tex,
     // distance they kick in at is important to preserve at any resolution.
     // Correct this with the upscaling factor of custom textures.
     s64 lod_offset = std::log2(g_renderer->GetEFBScale() / custom_tex_scale) * 256.f;
-    state.lod_bias = MathUtil::Clamp<s64>(state.lod_bias + lod_offset, -32768, 32767);
+    state.lod_bias = std::clamp<s64>(state.lod_bias + lod_offset, -32768, 32767);
 
     // Anisotropic also pushes mips farther away so it cannot be used either
     state.anisotropic_filtering = 0;
@@ -1128,7 +1128,7 @@ TextureCacheBase::GetTexture(u32 address, u32 width, u32 height, const TextureFo
   entry->memory_stride = entry->BytesPerRow();
   entry->SetNotCopy();
 
-  std::string basename = "";
+  std::string basename;
   if (g_ActiveConfig.bDumpTextures && !hires_tex)
   {
     basename = HiresTexture::GenBaseName(src_data, texture_size, &texMem[tlutaddr], palette_size,
@@ -1282,10 +1282,9 @@ TextureCacheBase::GetXFBTexture(u32 address, u32 width, u32 height, u32 stride,
 
   if (g_ActiveConfig.bDumpXFBTarget)
   {
-    // While this isn't really an xfb copy, we can treat it as such
-    // for dumping purposes
+    // While this isn't really an xfb copy, we can treat it as such for dumping purposes
     static int xfb_count = 0;
-    entry->texture->Save(StringFromFormat("loaded_xfb_%i.png",
+    entry->texture->Save(StringFromFormat("%sxfb_loaded_%i.png",
                                           File::GetUserPath(D_DUMPTEXTURES_IDX).c_str(),
                                           xfb_count++),
                          0);
@@ -1935,14 +1934,13 @@ void TextureCacheBase::ReleaseEFBCopyStagingTexture(std::unique_ptr<AbstractStag
 void TextureCacheBase::UninitializeXFBMemory(u8* dst, u32 stride, u32 bytes_per_row,
                                              u32 num_blocks_y)
 {
-// Originally, we planned on using a 'key color'
-// for alpha to address partial xfbs (Mario Strikers / Chicken Little).
-// This work was removed since it was unfinished but there
-// was still a desire to differentiate between the old and the new approach
-// which is why we still set uninitialized xfb memory to fuchsia
-// (Y=1,U=254,V=254) instead of dark green (Y=0,U=0,V=0) in YUV
-// like is done in the EFB path.
-// This comment is indented wrong because of the silly linter, btw.
+  // Originally, we planned on using a 'key color'
+  // for alpha to address partial xfbs (Mario Strikers / Chicken Little).
+  // This work was removed since it was unfinished but there
+  // was still a desire to differentiate between the old and the new approach
+  // which is why we still set uninitialized xfb memory to fuchsia
+  // (Y=1,U=254,V=254) instead of dark green (Y=0,U=0,V=0) in YUV
+  // like is done in the EFB path.
 
 #if defined(_M_X86) || defined(_M_X86_64)
   __m128i sixteenBytes = _mm_set1_epi16((s16)(u16)0xFE01);
@@ -2186,6 +2184,7 @@ void TextureCacheBase::CopyEFBToCacheEntry(TCacheEntry* entry, bool is_depth_cop
       is_depth_copy ? g_framebuffer_manager->ResolveEFBDepthTexture(framebuffer_rect) :
                       g_framebuffer_manager->ResolveEFBColorTexture(framebuffer_rect);
 
+  src_texture->FinishedRendering();
   g_renderer->BeginUtilityDrawing();
 
   // Fill uniform buffer.
@@ -2253,6 +2252,7 @@ void TextureCacheBase::CopyEFB(AbstractStagingTexture* dst, const EFBCopyParams&
       params.depth ? g_framebuffer_manager->ResolveEFBDepthTexture(framebuffer_rect) :
                      g_framebuffer_manager->ResolveEFBColorTexture(framebuffer_rect);
 
+  src_texture->FinishedRendering();
   g_renderer->BeginUtilityDrawing();
 
   // Fill uniform buffer.

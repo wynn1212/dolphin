@@ -52,6 +52,7 @@ RenderWidget::RenderWidget(QWidget* parent) : QWidget(parent)
   });
 
   connect(&Settings::Instance(), &Settings::EmulationStateChanged, this, [this](Core::State state) {
+    // Stop filling the background once emulation starts, but fill it until then (Bug 10958)
     SetFillBackground(Config::Get(Config::MAIN_RENDER_TO_MAIN) &&
                       state == Core::State::Uninitialized);
     if (state == Core::State::Running)
@@ -90,9 +91,15 @@ RenderWidget::RenderWidget(QWidget* parent) : QWidget(parent)
 
 void RenderWidget::SetFillBackground(bool fill)
 {
+  setAutoFillBackground(fill);
   setAttribute(Qt::WA_OpaquePaintEvent, !fill);
   setAttribute(Qt::WA_NoSystemBackground, !fill);
-  setAutoFillBackground(fill);
+  setAttribute(Qt::WA_PaintOnScreen, !fill);
+}
+
+QPaintEngine* RenderWidget::paintEngine() const
+{
+  return autoFillBackground() ? QWidget::paintEngine() : nullptr;
 }
 
 void RenderWidget::dragEnterEvent(QDragEnterEvent* event)
@@ -182,8 +189,8 @@ bool RenderWidget::event(QEvent* event)
   case QEvent::MouseMove:
     if (g_Config.bFreeLook)
       OnFreeLookMouseMove(static_cast<QMouseEvent*>(event));
+    [[fallthrough]];
 
-  // [[fallthrough]]
   case QEvent::MouseButtonPress:
     if (!Settings::Instance().GetHideCursor() && isActiveWindow())
     {

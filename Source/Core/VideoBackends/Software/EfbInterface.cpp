@@ -514,7 +514,7 @@ static u32 GammaCorrection(u32 color, const float gamma_rcp)
   for (int i = BLU_C; i <= RED_C; i++)
   {
     out_color[i] = static_cast<u8>(
-        MathUtil::Clamp(std::pow(in_colors[i] / 255.0f, gamma_rcp) * 255.0f, 0.0f, 255.0f));
+        std::clamp(std::pow(in_colors[i] / 255.0f, gamma_rcp) * 255.0f, 0.0f, 255.0f));
   }
 
   u32 out_color32;
@@ -588,8 +588,9 @@ void EncodeXFB(u8* xfb_in_ram, u32 memory_stride, const MathUtil::Rectangle<int>
     //
     //         In our implementation, the garbage just so happens to be the top or bottom row.
     //         Statistically, that could happen.
-    u16 y_prev = static_cast<u16>(std::max(clamp_top ? source_rect.top : 0, y - 1));
-    u16 y_next = static_cast<u16>(std::min(clamp_bottom ? source_rect.bottom : EFB_HEIGHT, y + 1));
+    const u16 y_prev = static_cast<u16>(std::max(clamp_top ? source_rect.top : 0, y - 1));
+    const u16 y_next =
+        static_cast<u16>(std::min<int>(clamp_bottom ? source_rect.bottom : EFB_HEIGHT, y + 1));
 
     // Get a scanline of YUV pixels in 4:4:4 format
     for (int i = 1, x = left; x < right; i++, x++)
@@ -709,4 +710,4 @@ void IncPerfCounterQuadCount(PerfQueryType type)
   quad[type] = 0;
   ++perf_values[type];
 }
-}
+}  // namespace EfbInterface
