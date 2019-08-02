@@ -19,6 +19,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
+#include "Common/IniFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
 #include "Common/NandPaths.h"
@@ -34,7 +35,9 @@
 #include "Core/FifoPlayer/FifoDataFile.h"
 #include "Core/HLE/HLE.h"
 #include "Core/HW/DVD/DVDInterface.h"
+#include "Core/HW/EXI/EXI_Device.h"
 #include "Core/HW/SI/SI.h"
+#include "Core/HW/SI/SI_Device.h"
 #include "Core/Host.h"
 #include "Core/IOS/ES/ES.h"
 #include "Core/IOS/ES/Formats.h"
@@ -46,7 +49,7 @@
 
 #include "DiscIO/Enums.h"
 #include "DiscIO/Volume.h"
-#include "DiscIO/WiiWad.h"
+#include "DiscIO/VolumeWad.h"
 
 SConfig* SConfig::m_Instance;
 
@@ -667,7 +670,7 @@ void SConfig::SetRunningGameMetadata(const DiscIO::Volume& volume,
   }
 }
 
-void SConfig::SetRunningGameMetadata(const IOS::ES::TMDReader& tmd)
+void SConfig::SetRunningGameMetadata(const IOS::ES::TMDReader& tmd, DiscIO::Platform platform)
 {
   const u64 tmd_title_id = tmd.GetTitleId();
 
@@ -675,12 +678,12 @@ void SConfig::SetRunningGameMetadata(const IOS::ES::TMDReader& tmd)
   // the disc header instead of the TMD. They can differ.
   // (IOS HLE ES calls us with a TMDReader rather than a volume when launching
   // a disc game, because ES has no reason to be accessing the disc directly.)
-  if (!DVDInterface::UpdateRunningGameMetadata(tmd_title_id))
+  if (platform == DiscIO::Platform::WiiWAD ||
+      !DVDInterface::UpdateRunningGameMetadata(tmd_title_id))
   {
     // If not launching a disc game, just read everything from the TMD.
-    const DiscIO::Country country =
-        DiscIO::CountryCodeToCountry(static_cast<u8>(tmd_title_id), DiscIO::Platform::WiiWAD,
-                                     tmd.GetRegion(), tmd.GetTitleVersion());
+    const DiscIO::Country country = DiscIO::CountryCodeToCountry(
+        static_cast<u8>(tmd_title_id), platform, tmd.GetRegion(), tmd.GetTitleVersion());
     SetRunningGameMetadata(tmd.GetGameID(), tmd.GetGameTDBID(), tmd_title_id, tmd.GetTitleVersion(),
                            country);
   }
@@ -742,7 +745,7 @@ void SConfig::SetRunningGameMetadata(const std::string& game_id, const std::stri
     HLE::Reload();
     PatchEngine::Reload();
     HiresTexture::Update();
-    DolphinAnalytics::Instance()->ReportGameStart();
+    DolphinAnalytics::Instance().ReportGameStart();
   }
 }
 
@@ -885,9 +888,9 @@ struct SetGameMetadata
     return true;
   }
 
-  bool operator()(const DiscIO::WiiWAD& wad) const
+  bool operator()(const DiscIO::VolumeWAD& wad) const
   {
-    if (!wad.IsValid() || !wad.GetTMD().IsValid())
+    if (!wad.GetTMD().IsValid())
     {
       PanicAlertT("This WAD is not valid.");
       return false;
@@ -899,7 +902,7 @@ struct SetGameMetadata
     }
 
     const IOS::ES::TMDReader& tmd = wad.GetTMD();
-    config->SetRunningGameMetadata(tmd);
+    config->SetRunningGameMetadata(tmd, DiscIO::Platform::WiiWAD);
     config->bWii = true;
     *region = tmd.GetRegion();
     return true;
@@ -914,7 +917,7 @@ struct SetGameMetadata
       PanicAlertT("This title cannot be booted.");
       return false;
     }
-    config->SetRunningGameMetadata(tmd);
+    config->SetRunningGameMetadata(tmd, DiscIO::Platform::WiiWAD);
     config->bWii = true;
     *region = tmd.GetRegion();
     return true;

@@ -64,7 +64,7 @@ std::string GetName(Country country, bool translate)
     break;
   }
 
-  return translate ? GetStringT(name.c_str()) : name;
+  return translate ? Common::GetStringT(name.c_str()) : name;
 }
 
 std::string GetName(Language language, bool translate)
@@ -108,7 +108,7 @@ std::string GetName(Language language, bool translate)
     break;
   }
 
-  return translate ? GetStringT(name.c_str()) : name;
+  return translate ? Common::GetStringT(name.c_str()) : name;
 }
 
 bool IsDisc(Platform volume_type)
@@ -150,6 +150,9 @@ Region CountryCodeToRegion(u8 country_code, Platform platform, Region expected_r
 {
   switch (country_code)
   {
+  case '\2':
+    return expected_region;  // Wii Menu (same title ID for all regions)
+
   case 'J':
     return Region::NTSC_J;
 

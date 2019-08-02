@@ -78,7 +78,7 @@ void Updater::OnUpdateAvailable(const NewVersionInformation& info)
     layout->addWidget(update_later_check);
     layout->addWidget(buttons);
 
-    connect(never_btn, &QPushButton::pressed, [dialog] {
+    connect(never_btn, &QPushButton::clicked, [dialog] {
       Settings::Instance().SetAutoUpdateTrack(QStringLiteral(""));
       dialog->reject();
     });
@@ -95,6 +95,11 @@ void Updater::OnUpdateAvailable(const NewVersionInformation& info)
                                 AutoUpdateChecker::RestartMode::RESTART_AFTER_UPDATE);
 
     if (!later)
-      m_parent->close();
+    {
+      RunOnObject(m_parent, [this] {
+        m_parent->close();
+        return 0;
+      });
+    }
   }
 }

@@ -470,7 +470,7 @@ void Shutdown()
   DVDThread::Stop();
 }
 
-void SetDisc(std::unique_ptr<DiscIO::Volume> disc,
+void SetDisc(std::unique_ptr<DiscIO::VolumeDisc> disc,
              std::optional<std::vector<std::string>> auto_disc_change_paths = {})
 {
   if (disc)
@@ -506,11 +506,10 @@ static void EjectDiscCallback(u64 userdata, s64 cyclesLate)
 
 static void InsertDiscCallback(u64 userdata, s64 cyclesLate)
 {
-  std::unique_ptr<DiscIO::Volume> new_volume =
-      DiscIO::CreateVolumeFromFilename(s_disc_path_to_insert);
+  std::unique_ptr<DiscIO::VolumeDisc> new_disc = DiscIO::CreateDisc(s_disc_path_to_insert);
 
-  if (new_volume)
-    SetDisc(std::move(new_volume), {});
+  if (new_disc)
+    SetDisc(std::move(new_disc), {});
   else
     PanicAlertT("The disc that was about to be inserted couldn't be found.");
 
@@ -1315,7 +1314,7 @@ void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& partition, u
       // TODO: This calculation is slightly wrong when decrypt is true - it uses the size of
       // the copy from IOS to PPC but is supposed to model the copy from the disc drive to IOS.
       ticks_until_completion +=
-          static_cast<u64>(chunk_length) * SystemTimers::GetTicksPerSecond() / BUFFER_TRANSFER_RATE;
+          static_cast<u64>(chunk_length) * ticks_per_second / BUFFER_TRANSFER_RATE;
       buffered_blocks++;
     }
     else
@@ -1327,6 +1326,15 @@ void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& partition, u
         // Unbuffered seek+read
         ticks_until_completion += static_cast<u64>(
             ticks_per_second * DVDMath::CalculateSeekTime(head_position, dvd_offset));
+
+        // TODO: The above emulates seeking and then reading one ECC block of data,
+        // and then the below emulates the rotational latency. The rotational latency
+        // should actually happen before reading data from the disc.
+
+        const double time_after_seek =
+            (CoreTiming::GetTicks() + ticks_until_completion) / ticks_per_second;
+        ticks_until_completion += ticks_per_second * DVDMath::CalculateRotationalLatency(
+                                                         dvd_offset, time_after_seek, wii_disc);
 
         DEBUG_LOG(DVDINTERFACE, "Seek+read 0x%" PRIx32 " bytes @ 0x%" PRIx64 " ticks=%" PRId64,
                   chunk_length, offset, ticks_until_completion);

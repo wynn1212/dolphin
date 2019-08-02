@@ -82,10 +82,10 @@ void Renderer::Create3DVisionTexture(int width, int height)
 
   CD3D11_TEXTURE2D_DESC texture_desc(DXGI_FORMAT_R8G8B8A8_UNORM, width * 2, height + 1, 1, 1,
                                      D3D11_BIND_RENDER_TARGET, D3D11_USAGE_DEFAULT, 0, 1, 0, 0);
-  ID3D11Texture2D* texture;
-  HRESULT hr = D3D::device->CreateTexture2D(&texture_desc, &sys_data, &texture);
+  ComPtr<ID3D11Texture2D> texture;
+  HRESULT hr = D3D::device->CreateTexture2D(&texture_desc, &sys_data, texture.GetAddressOf());
   CHECK(SUCCEEDED(hr), "Create 3D Vision Texture");
-  m_3d_vision_texture = DXTexture::CreateAdopted(texture);
+  m_3d_vision_texture = DXTexture::CreateAdopted(std::move(texture));
   m_3d_vision_framebuffer = DXFramebuffer::Create(m_3d_vision_texture.get(), nullptr);
 }
 
@@ -113,13 +113,13 @@ std::unique_ptr<AbstractFramebuffer> Renderer::CreateFramebuffer(AbstractTexture
 }
 
 std::unique_ptr<AbstractShader> Renderer::CreateShaderFromSource(ShaderStage stage,
-                                                                 const char* source, size_t length)
+                                                                 std::string_view source)
 {
-  DXShader::BinaryData bytecode;
-  if (!DXShader::CompileShader(D3D::feature_level, &bytecode, stage, source, length))
+  auto bytecode = DXShader::CompileShader(D3D::feature_level, stage, source);
+  if (!bytecode)
     return nullptr;
 
-  return DXShader::CreateFromBytecode(stage, std::move(bytecode));
+  return DXShader::CreateFromBytecode(stage, std::move(*bytecode));
 }
 
 std::unique_ptr<AbstractShader> Renderer::CreateShaderFromBinary(ShaderStage stage,
@@ -328,10 +328,12 @@ void Renderer::WaitForGPUIdle()
   D3D::context->Flush();
 }
 
-void Renderer::RenderXFBToScreen(const AbstractTexture* texture, const MathUtil::Rectangle<int>& rc)
+void Renderer::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
+                                 const AbstractTexture* source_texture,
+                                 const MathUtil::Rectangle<int>& source_rc)
 {
   if (g_ActiveConfig.stereo_mode != StereoMode::Nvidia3DVision)
-    return ::Renderer::RenderXFBToScreen(texture, rc);
+    return ::Renderer::RenderXFBToScreen(target_rc, source_texture, source_rc);
 
   if (!m_3d_vision_texture)
     Create3DVisionTexture(m_backbuffer_width, m_backbuffer_height);
@@ -339,12 +341,11 @@ void Renderer::RenderXFBToScreen(const AbstractTexture* texture, const MathUtil:
   // Render to staging texture which is double the width of the backbuffer
   SetAndClearFramebuffer(m_3d_vision_framebuffer.get());
 
-  const auto target_rc = GetTargetRectangle();
-  m_post_processor->BlitFromTexture(target_rc, rc, texture, 0);
+  m_post_processor->BlitFromTexture(target_rc, source_rc, source_texture, 0);
   m_post_processor->BlitFromTexture(
       MathUtil::Rectangle<int>(target_rc.left + m_backbuffer_width, target_rc.top,
                                target_rc.right + m_backbuffer_width, target_rc.bottom),
-      rc, texture, 1);
+      source_rc, source_texture, 1);
 
   // Copy the left eye to the backbuffer, if Nvidia 3D Vision is enabled it should
   // recognize the signature and automatically include the right eye frame.

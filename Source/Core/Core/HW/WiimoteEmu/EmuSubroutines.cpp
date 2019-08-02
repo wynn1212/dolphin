@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <iterator>
 
 #include "Common/BitUtils.h"
 #include "Common/ChunkFile.h"
@@ -393,7 +394,7 @@ void Wiimote::HandleSpeakerData(const WiimoteCommon::OutputReportSpeakerData& rp
   // (important to keep decoder in proper state)
   if (!m_speaker_mute)
   {
-    if (rpt.length > ArraySize(rpt.data))
+    if (rpt.length > std::size(rpt.data))
     {
       ERROR_LOG(WIIMOTE, "Bad speaker data length: %d", rpt.length);
     }
@@ -519,7 +520,7 @@ bool Wiimote::ProcessReadDataRequest()
         m_read_request.address + m_read_request.size > CameraLogic::REPORT_DATA_OFFSET;
 
     if (is_reading_ext || is_reading_ir)
-      DolphinAnalytics::Instance()->ReportGameQuirk(GameQuirk::DIRECTLY_READS_WIIMOTE_INPUT);
+      DolphinAnalytics::Instance().ReportGameQuirk(GameQuirk::DIRECTLY_READS_WIIMOTE_INPUT);
 
     // Top byte of address is ignored on the bus, but it IS maintained in the read-reply.
     auto const bytes_read = m_i2c_bus.BusRead(
