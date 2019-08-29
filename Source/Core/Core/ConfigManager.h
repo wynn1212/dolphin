@@ -18,7 +18,6 @@ class IniFile;
 
 namespace DiscIO
 {
-enum class Country;
 enum class Language;
 enum class Platform;
 enum class Region;
@@ -141,7 +140,7 @@ struct SConfig
   float fSyncGpuOverclock;
 
   int SelectedLanguage = 0;
-  bool bOverrideGCLanguage = false;
+  bool bOverrideRegionSettings = false;
 
   bool bWii = false;
   bool m_is_mios = false;
@@ -167,8 +166,6 @@ struct SConfig
   // USB passthrough settings
   std::set<std::pair<u16, u16>> m_usb_passthrough_devices;
   bool IsUSBDeviceWhitelisted(std::pair<u16, u16> vid_pid) const;
-
-  bool m_enable_signature_checks = true;
 
   // Fifo Player related settings
   bool bLoopFifoReplay = true;
@@ -212,6 +209,7 @@ struct SConfig
   bool SetPathsAndGameMetadata(const BootParameters& boot);
   static DiscIO::Region GetFallbackRegion();
   DiscIO::Language GetCurrentLanguage(bool wii) const;
+  DiscIO::Language GetLanguageAdjustedForRegion(bool wii, DiscIO::Region region) const;
 
   IniFile LoadDefaultGameIni() const;
   IniFile LoadLocalGameIni() const;
@@ -365,7 +363,7 @@ private:
   void LoadJitDebugSettings(IniFile& ini);
 
   void SetRunningGameMetadata(const std::string& game_id, const std::string& gametdb_id,
-                              u64 title_id, u16 revision, DiscIO::Country country);
+                              u64 title_id, u16 revision, DiscIO::Region region);
 
   static SConfig* m_Instance;
 

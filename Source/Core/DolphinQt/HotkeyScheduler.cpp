@@ -302,8 +302,7 @@ void HotkeyScheduler::Run()
         OSD::AddMessage(std::string("Volume: ") +
                         (SConfig::GetInstance().m_IsMuted ?
                              "Muted" :
-                             std::to_string(SConfig::GetInstance().m_Volume)) +
-                        "%");
+                             std::to_string(SConfig::GetInstance().m_Volume) + "%"));
       };
 
       // Volume
@@ -337,7 +336,7 @@ void HotkeyScheduler::Run()
           OSD::AddMessage("Internal Resolution: Native");
           break;
         default:
-          OSD::AddMessage("Internal Resolution: %dx", g_Config.iEFBScale);
+          OSD::AddMessage(StringFromFormat("Internal Resolution: %dx", g_Config.iEFBScale));
           break;
         }
       };

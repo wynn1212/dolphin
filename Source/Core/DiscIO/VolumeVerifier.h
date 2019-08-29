@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <future>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -94,10 +96,12 @@ private:
   bool ShouldHaveMasterpiecePartitions() const;
   bool ShouldBeDualLayer() const;
   void CheckDiscSize();
-  u64 GetBiggestUsedOffset() const;
-  u64 GetBiggestUsedOffset(const FileInfo& file_info) const;
+  u64 GetBiggestReferencedOffset() const;
+  u64 GetBiggestReferencedOffset(const FileInfo& file_info) const;
   void CheckMisc();
   void SetUpHashing();
+  void WaitForAsyncOperations() const;
+  bool ReadChunkAndWaitForAsyncOperations(u64 bytes_to_read);
 
   void AddProblem(Severity severity, std::string text);
 
@@ -113,6 +117,14 @@ private:
   mbedtls_md5_context m_md5_context;
   mbedtls_sha1_context m_sha1_context;
 
+  std::vector<u8> m_data;
+  std::mutex m_volume_mutex;
+  std::future<void> m_crc32_future;
+  std::future<void> m_md5_future;
+  std::future<void> m_sha1_future;
+  std::future<void> m_content_future;
+  std::future<void> m_block_future;
+
   DiscScrubber m_scrubber;
   IOS::ES::TicketReader m_ticket;
   std::vector<u64> m_content_offsets;
@@ -121,6 +133,9 @@ private:
   size_t m_block_index = 0;  // Index in m_blocks, not index in a specific partition
   std::map<Partition, size_t> m_block_errors;
   std::map<Partition, size_t> m_unused_block_errors;
+
+  u64 m_biggest_referenced_offset = 0;
+  u64 m_biggest_verified_offset = 0;
 
   bool m_started = false;
   bool m_done = false;

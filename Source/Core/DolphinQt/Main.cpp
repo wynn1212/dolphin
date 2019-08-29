@@ -39,7 +39,7 @@ static bool QtMsgAlertHandler(const char* caption, const char* text, bool yes_no
                               Common::MsgType style)
 {
   std::optional<bool> r = RunOnObject(QApplication::instance(), [&] {
-    ModalMessageBox message_box(QApplication::activeWindow());
+    ModalMessageBox message_box(QApplication::activeWindow(), Qt::ApplicationModal);
     message_box.setWindowTitle(QString::fromUtf8(caption));
     message_box.setText(QString::fromUtf8(text));
 
@@ -138,7 +138,7 @@ int main(int argc, char* argv[])
   UICommon::CreateDirectories();
   UICommon::Init();
   Resources::Init();
-  Settings::Instance().SetBatchModeEnabled(options.is_set("batch"));
+  Settings::Instance().SetBatchModeEnabled(options.is_set("batch") && options.is_set("exec"));
 
   // Hook up alerts from core
   Common::RegisterMsgAlertHandler(QtMsgAlertHandler);
@@ -217,8 +217,11 @@ int main(int argc, char* argv[])
     }
 #endif
 
-    auto* updater = new Updater(&win);
-    updater->start();
+    if (!Settings::Instance().IsBatchModeEnabled())
+    {
+      auto* updater = new Updater(&win);
+      updater->start();
+    }
 
     retval = app.exec();
   }

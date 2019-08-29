@@ -1279,7 +1279,7 @@ bool NetPlayServer::StartGame()
   spac << static_cast<std::underlying_type_t<PowerPC::CPUCore>>(m_settings.m_CPUcore);
   spac << m_settings.m_EnableCheats;
   spac << m_settings.m_SelectedLanguage;
-  spac << m_settings.m_OverrideGCLanguage;
+  spac << m_settings.m_OverrideRegionSettings;
   spac << m_settings.m_ProgressiveScan;
   spac << m_settings.m_PAL60;
   spac << m_settings.m_DSPEnableJIT;
@@ -1288,7 +1288,6 @@ bool NetPlayServer::StartGame()
   spac << m_settings.m_CopyWiiSave;
   spac << m_settings.m_OCEnable;
   spac << m_settings.m_OCFactor;
-  spac << m_settings.m_ReducePollingRate;
 
   for (auto& device : m_settings.m_EXIDevice)
     spac << device;

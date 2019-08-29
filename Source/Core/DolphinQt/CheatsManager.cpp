@@ -21,6 +21,7 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include "Core/ActionReplay.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/Debugger/PPCDebugInterface.h"
@@ -625,8 +626,7 @@ static QString GetResultString(const Result& result)
   case DataType::String:
     return QObject::tr("String Match");
   default:
-    // Make MSVC happy
-    return QStringLiteral("");
+    return {};
   }
 }
 
@@ -722,7 +722,7 @@ void CheatsManager::Reset()
   m_match_table->clear();
   m_watch_table->clear();
   m_match_decimal->setChecked(true);
-  m_result_label->setText(QStringLiteral(""));
+  m_result_label->clear();
 
   Update();
 }

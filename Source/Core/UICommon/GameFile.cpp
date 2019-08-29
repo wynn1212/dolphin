@@ -46,31 +46,11 @@ namespace
 constexpr char COVER_URL[] = "https://art.gametdb.com/wii/cover/%s/%s.png";
 
 const std::string EMPTY_STRING;
-
-bool UseGameCovers()
-{
-// We ifdef this out on Android because accessing the config before emulation start makes us crash.
-// The Android GUI handles covers in Java anyway, so this doesn't make us lose any functionality.
-#ifdef ANDROID
-  return false;
-#else
-  return Config::Get(Config::MAIN_USE_GAME_COVERS);
-#endif
-}
 }  // Anonymous namespace
 
 DiscIO::Language GameFile::GetConfigLanguage() const
 {
-  if (m_platform == DiscIO::Platform::GameCubeDisc && m_country == DiscIO::Country::Japan)
-    return DiscIO::Language::Japanese;
-
-#ifdef ANDROID
-  // TODO: Make the Android app load the config at app start instead of emulation start
-  // so that we can access the user's preference here
-  return DiscIO::Language::English;
-#else
-  return SConfig::GetInstance().GetCurrentLanguage(DiscIO::IsWii(m_platform));
-#endif
+  return SConfig::GetInstance().GetLanguageAdjustedForRegion(DiscIO::IsWii(m_platform), m_region);
 }
 
 bool operator==(const GameBanner& lhs, const GameBanner& rhs)
@@ -177,7 +157,7 @@ bool GameFile::IsValid() const
 
 bool GameFile::CustomCoverChanged()
 {
-  if (!m_custom_cover.buffer.empty() || !UseGameCovers())
+  if (!m_custom_cover.buffer.empty() || !Config::Get(Config::MAIN_USE_GAME_COVERS))
     return false;
 
   std::string path, name;
@@ -204,7 +184,7 @@ bool GameFile::CustomCoverChanged()
 
 void GameFile::DownloadDefaultCover()
 {
-  if (!m_default_cover.buffer.empty() || !UseGameCovers())
+  if (!m_default_cover.buffer.empty() || !Config::Get(Config::MAIN_USE_GAME_COVERS))
     return;
 
   const auto cover_path = File::GetUserPath(D_COVERCACHE_IDX) + DIR_SEP;
@@ -270,7 +250,7 @@ void GameFile::DownloadDefaultCover()
 
 bool GameFile::DefaultCoverChanged()
 {
-  if (!m_default_cover.buffer.empty() || !UseGameCovers())
+  if (!m_default_cover.buffer.empty() || !Config::Get(Config::MAIN_USE_GAME_COVERS))
     return false;
 
   const auto cover_path = File::GetUserPath(D_COVERCACHE_IDX) + DIR_SEP;

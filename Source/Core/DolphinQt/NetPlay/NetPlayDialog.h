@@ -49,6 +49,8 @@ public:
   void OnMsgStartGame() override;
   void OnMsgStopGame() override;
   void OnMsgPowerButton() override;
+  void OnPlayerConnect(const std::string& player) override;
+  void OnPlayerDisconnect(const std::string& player) override;
   void OnPadBufferChanged(u32 buffer) override;
   void OnHostInputAuthorityChanged(bool enabled) override;
   void OnDesync(u32 frame, const std::string& player) override;
@@ -131,7 +133,6 @@ private:
   QAction* m_sync_save_data_action;
   QAction* m_sync_codes_action;
   QAction* m_record_input_action;
-  QAction* m_reduce_polling_rate_action;
   QAction* m_strict_settings_sync_action;
   QAction* m_host_input_authority_action;
   QAction* m_sync_all_wii_saves_action;
