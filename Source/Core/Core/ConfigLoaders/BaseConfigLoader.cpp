@@ -89,6 +89,7 @@ const std::map<Config::System, int> system_to_ini = {
     {Config::System::GFX, F_GFXCONFIG_IDX},
     {Config::System::Logger, F_LOGGERCONFIG_IDX},
     {Config::System::Debugger, F_DEBUGGERCONFIG_IDX},
+    {Config::System::DualShockUDPClient, F_DUALSHOCKUDPCLIENTCONFIG_IDX},
 };
 
 // INI layer configuration loader
@@ -112,7 +113,7 @@ public:
 
         for (const auto& value : section_map)
         {
-          const Config::ConfigLocation location{system.first, section_name, value.first};
+          const Config::Location location{system.first, section_name, value.first};
           layer->Set(location, value.second);
         }
       }
@@ -132,7 +133,7 @@ public:
 
     for (const auto& config : layer->GetLayerMap())
     {
-      const Config::ConfigLocation& location = config.first;
+      const Config::Location& location = config.first;
       const std::optional<std::string>& value = config.second;
 
       // Done by SaveToSYSCONF

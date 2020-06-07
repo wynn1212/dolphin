@@ -6,8 +6,10 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.Uri;
 import android.os.Bundle;
-import android.support.v4.app.FragmentActivity;
-import android.support.v4.content.LocalBroadcastManager;
+
+import androidx.fragment.app.FragmentActivity;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+
 import android.util.Log;
 import android.widget.Toast;
 
@@ -128,8 +130,8 @@ public class AppLinkActivity extends FragmentActivity
 
   private void tryPlay(AppLinkHelper.PlayAction action)
   {
-    // TODO: This approach of getting the game from the game file cache without rescanning
-    // the library means that we can fail to launch games if the cache file has been deleted.
+    // TODO: This approach of getting the game from the game file cache without rescanning the
+    //       library means that we can fail to launch games if the cache file has been deleted.
 
     GameFile game = GameFileCacheService.getGameFileByGameId(action.getGameId());
 

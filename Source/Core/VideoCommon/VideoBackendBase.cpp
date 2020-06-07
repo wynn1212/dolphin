@@ -10,12 +10,22 @@
 #include <string>
 #include <vector>
 
+#include "fmt/format.h"
+
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
+#include "Common/Config/Config.h"
 #include "Common/Event.h"
 #include "Common/Logging/Log.h"
+
+#include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
+
+// OpenGL is not available on Windows-on-ARM64
+#if !defined(_WIN32) || !defined(_M_ARM64)
+#define HAS_OPENGL 1
+#endif
 
 // TODO: ugly
 #ifdef _WIN32
@@ -23,8 +33,10 @@
 #include "VideoBackends/D3D12/VideoBackend.h"
 #endif
 #include "VideoBackends/Null/VideoBackend.h"
+#ifdef HAS_OPENGL
 #include "VideoBackends/OGL/VideoBackend.h"
 #include "VideoBackends/Software/VideoBackend.h"
+#endif
 #include "VideoBackends/Vulkan/VideoBackend.h"
 
 #include "VideoCommon/AsyncRequests.h"
@@ -60,6 +72,12 @@ extern "C" {
 __declspec(dllexport) DWORD NvOptimusEnablement = 1;
 }
 #endif
+
+std::string VideoBackendBase::BadShaderFilename(const char* shader_stage, int counter)
+{
+  return fmt::format("{}bad_{}_{}_{}.txt", File::GetUserPath(D_DUMP_IDX), shader_stage,
+                     g_video_backend->GetName(), counter);
+}
 
 void VideoBackendBase::Video_ExitLoop()
 {
@@ -182,13 +200,17 @@ u16 VideoBackendBase::Video_GetBoundingBox(int index)
 void VideoBackendBase::PopulateList()
 {
   // OGL > D3D11 > Vulkan > SW > Null
+#ifdef HAS_OPENGL
   g_available_video_backends.push_back(std::make_unique<OGL::VideoBackend>());
+#endif
 #ifdef _WIN32
   g_available_video_backends.push_back(std::make_unique<DX11::VideoBackend>());
   g_available_video_backends.push_back(std::make_unique<DX12::VideoBackend>());
 #endif
   g_available_video_backends.push_back(std::make_unique<Vulkan::VideoBackend>());
+#ifdef HAS_OPENGL
   g_available_video_backends.push_back(std::make_unique<SW::VideoSoftware>());
+#endif
   g_available_video_backends.push_back(std::make_unique<Null::VideoBackend>());
 
   const auto iter =
@@ -225,16 +247,19 @@ void VideoBackendBase::ActivateBackend(const std::string& name)
 
 void VideoBackendBase::PopulateBackendInfo()
 {
-  // If the core is running, the backend info will have been populated already.
-  // If we did it here, the UI thread can race with the with the GPU thread.
-  if (Core::IsRunning())
-    return;
-
   // We refresh the config after initializing the backend info, as system-specific settings
   // such as anti-aliasing, or the selected adapter may be invalid, and should be checked.
-  ActivateBackend(SConfig::GetInstance().m_strVideoBackend);
+  ActivateBackend(Config::Get(Config::MAIN_GFX_BACKEND));
   g_video_backend->InitBackendInfo();
   g_Config.Refresh();
+}
+
+void VideoBackendBase::PopulateBackendInfoFromUI()
+{
+  // If the core is running, the backend info will have been populated already.
+  // If we did it here, the UI thread can race with the with the GPU thread.
+  if (!Core::IsRunning())
+    PopulateBackendInfo();
 }
 
 void VideoBackendBase::DoState(PointerWrap& p)
@@ -270,7 +295,6 @@ void VideoBackendBase::InitializeShared()
   PixelEngine::Init();
   BPInit();
   VertexLoaderManager::Init();
-  IndexGenerator::Init();
   VertexShaderManager::Init();
   GeometryShaderManager::Init();
   PixelShaderManager::Init();

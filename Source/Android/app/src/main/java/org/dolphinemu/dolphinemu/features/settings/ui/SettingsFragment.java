@@ -1,12 +1,13 @@
 package org.dolphinemu.dolphinemu.features.settings.ui;
 
-import android.app.Activity;
 import android.content.Context;
 import android.os.Bundle;
-import android.support.annotation.Nullable;
-import android.support.v4.app.Fragment;
-import android.support.v7.widget.LinearLayoutManager;
-import android.support.v7.widget.RecyclerView;
+
+import androidx.annotation.Nullable;
+import androidx.fragment.app.Fragment;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -37,8 +38,11 @@ public final class SettingsFragment extends Fragment implements SettingsFragment
     titles.put(MenuTag.CONFIG, R.string.preferences_settings);
     titles.put(MenuTag.CONFIG_GENERAL, R.string.general_submenu);
     titles.put(MenuTag.CONFIG_INTERFACE, R.string.interface_submenu);
+    titles.put(MenuTag.CONFIG_AUDIO, R.string.audio_submenu);
+    titles.put(MenuTag.CONFIG_PATHS, R.string.paths_submenu);
     titles.put(MenuTag.CONFIG_GAME_CUBE, R.string.gamecube_submenu);
     titles.put(MenuTag.CONFIG_WII, R.string.wii_submenu);
+    titles.put(MenuTag.CONFIG_ADVANCED, R.string.advanced_submenu);
     titles.put(MenuTag.WIIMOTE, R.string.grid_menu_wiimote_settings);
     titles.put(MenuTag.WIIMOTE_EXTENSION, R.string.wiimote_extensions);
     titles.put(MenuTag.GCPAD_TYPE, R.string.grid_menu_gcpad_settings);
@@ -87,20 +91,6 @@ public final class SettingsFragment extends Fragment implements SettingsFragment
     mPresenter.onAttach();
   }
 
-  /**
-   * This version of onAttach is needed for versions below Marshmallow.
-   *
-   * @param activity
-   */
-  @Override
-  public void onAttach(Activity activity)
-  {
-    super.onAttach(activity);
-
-    mActivity = (SettingsActivityView) activity;
-    mPresenter.onAttach();
-  }
-
   @Override
   public void onCreate(Bundle savedInstanceState)
   {
@@ -137,11 +127,11 @@ public final class SettingsFragment extends Fragment implements SettingsFragment
 
     LinearLayoutManager manager = new LinearLayoutManager(getActivity());
 
-    RecyclerView recyclerView = (RecyclerView) view.findViewById(R.id.list_settings);
+    RecyclerView recyclerView = view.findViewById(R.id.list_settings);
 
     recyclerView.setAdapter(mAdapter);
     recyclerView.setLayoutManager(manager);
-    recyclerView.addItemDecoration(new DividerItemDecoration(getActivity(), null));
+    recyclerView.addItemDecoration(new DividerItemDecoration(requireActivity(), null));
 
     SettingsActivityView activity = (SettingsActivityView) getActivity();
     mPresenter.onViewCreated(menuTag, activity.getSettings());
@@ -229,5 +219,4 @@ public final class SettingsFragment extends Fragment implements SettingsFragment
   {
     mActivity.onExtensionSettingChanged(menuTag, value);
   }
-
 }

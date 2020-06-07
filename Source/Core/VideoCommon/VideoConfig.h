@@ -40,8 +40,7 @@ enum class StereoMode : int
   TAB,
   Anaglyph,
   QuadBuffer,
-  Passive,
-  Nvidia3DVision,
+  Passive
 };
 
 enum class ShaderCompilationMode : int
@@ -50,6 +49,13 @@ enum class ShaderCompilationMode : int
   SynchronousUberShaders,
   AsynchronousUberShaders,
   AsynchronousSkipRendering
+};
+
+enum class FreelookControlType : int
+{
+  SixAxis,
+  FPS,
+  Orbital
 };
 
 // NEVER inherit from this class.
@@ -108,6 +114,7 @@ struct VideoConfig final
   std::string sDumpPath;
   bool bInternalResolutionFrameDumps;
   bool bFreeLook;
+  FreelookControlType iFreelookControlType;
   bool bBorderlessFullscreen;
   bool bEnableGPUTextureDecoding;
   int iBitrateKbps;
@@ -125,6 +132,7 @@ struct VideoConfig final
   bool bDisableCopyToVRAM;
   bool bDeferEFBCopies;
   bool bImmediateXFB;
+  bool bSkipPresentingDuplicateXFBs;
   bool bCopyEFBScaled;
   int iSafeTextureCache_ColorSamples;
   float fAspectRatioHackW, fAspectRatioHackH;
@@ -221,6 +229,7 @@ struct VideoConfig final
     bool bSupportsBackgroundCompiling;
     bool bSupportsLargePoints;
     bool bSupportsPartialDepthCopies;
+    bool bSupportsDepthReadback;
     bool bSupportsShaderBinaries;
     bool bSupportsPipelineCacheData;
   } backend_info;

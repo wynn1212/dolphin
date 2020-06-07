@@ -368,6 +368,9 @@ QWidget* CheatsManager::CreateCheatSearch()
   m_match_table = new QTableWidget;
   m_watch_table = new QTableWidget;
 
+  m_match_table->setTabKeyNavigation(false);
+  m_watch_table->setTabKeyNavigation(false);
+
   m_match_table->verticalHeader()->hide();
   m_watch_table->verticalHeader()->hide();
 
@@ -568,7 +571,7 @@ void CheatsManager::NewSearch()
     return;
 
   Core::RunAsCPUThread([&] {
-    for (u32 i = 0; i < Memory::REALRAM_SIZE - GetTypeSize(); i++)
+    for (u32 i = 0; i < Memory::GetRamSizeReal() - GetTypeSize(); i++)
     {
       if (PowerPC::HostIsRAMAddress(base_address + i) && matches_func(base_address + i))
         m_results.push_back(

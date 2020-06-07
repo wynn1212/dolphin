@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
 #include "Common/Event.h"
@@ -19,7 +21,6 @@
 #include "Common/FileUtil.h"
 #include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
-#include "Common/StringUtil.h"
 #include "Common/Thread.h"
 #include "Common/Timer.h"
 #include "Common/Version.h"
@@ -29,6 +30,7 @@
 #include "Core/CoreTiming.h"
 #include "Core/GeckoCode.h"
 #include "Core/HW/HW.h"
+#include "Core/HW/Memmap.h"
 #include "Core/HW/Wiimote.h"
 #include "Core/Host.h"
 #include "Core/Movie.h"
@@ -72,7 +74,7 @@ static Common::Event g_compressAndDumpStateSyncEvent;
 static std::thread g_save_thread;
 
 // Don't forget to increase this after doing changes on the savestate system
-static const u32 STATE_VERSION = 111;  // Last changed in PR 6321
+constexpr u32 STATE_VERSION = 115;  // Last changed in PR 8722
 
 // Maps savestate versions to Dolphin versions.
 // Versions after 42 don't need to be added to this list,
@@ -163,9 +165,27 @@ static void DoState(PointerWrap& p)
   p.Do(is_wii);
   if (is_wii != is_wii_currently)
   {
-    OSD::AddMessage(StringFromFormat("Cannot load a savestate created under %s mode in %s mode",
-                                     is_wii ? "Wii" : "GC", is_wii_currently ? "Wii" : "GC"),
+    OSD::AddMessage(fmt::format("Cannot load a savestate created under {} mode in {} mode",
+                                is_wii ? "Wii" : "GC", is_wii_currently ? "Wii" : "GC"),
                     OSD::Duration::NORMAL, OSD::Color::RED);
+    p.SetMode(PointerWrap::MODE_MEASURE);
+    return;
+  }
+
+  // Check to make sure the emulated memory sizes are the same as the savestate
+  u32 state_mem1_size = Memory::GetRamSizeReal();
+  u32 state_mem2_size = Memory::GetExRamSizeReal();
+  p.Do(state_mem1_size);
+  p.Do(state_mem2_size);
+  if (state_mem1_size != Memory::GetRamSizeReal() || state_mem2_size != Memory::GetExRamSizeReal())
+  {
+    OSD::AddMessage(fmt::format("Memory size mismatch!\n"
+                                "Current | MEM1 {:08X} ({:3}MB)    MEM2 {:08X} ({:3}MB)\n"
+                                "State   | MEM1 {:08X} ({:3}MB)    MEM2 {:08X} ({:3}MB)",
+                                Memory::GetRamSizeReal(), Memory::GetRamSizeReal() / 0x100000U,
+                                Memory::GetExRamSizeReal(), Memory::GetExRamSizeReal() / 0x100000U,
+                                state_mem1_size, state_mem1_size / 0x100000U, state_mem2_size,
+                                state_mem2_size / 0x100000U));
     p.SetMode(PointerWrap::MODE_MEASURE);
     return;
   }
@@ -340,8 +360,8 @@ static void CompressAndDumpState(CompressAndDumpState_args save_args)
   }
 
   // Setting up the header
-  StateHeader header;
-  strncpy(header.gameID, SConfig::GetInstance().GetGameID().c_str(), 6);
+  StateHeader header{};
+  SConfig::GetInstance().GetGameID().copy(header.gameID, std::size(header.gameID));
   header.size = g_use_compression ? (u32)buffer_size : 0;
   header.time = Common::Timer::GetDoubleTime();
 
@@ -382,7 +402,7 @@ static void CompressAndDumpState(CompressAndDumpState_args save_args)
     f.WriteBytes(buffer_data, buffer_size);
   }
 
-  Core::DisplayMessage(StringFromFormat("Saved State to %s", filename.c_str()), 2000);
+  Core::DisplayMessage(fmt::format("Saved State to {}", filename), 2000);
   Host_UpdateMainFrame();
 }
 
@@ -477,8 +497,9 @@ static void LoadFileStateData(const std::string& filename, std::vector<u8>& ret_
 
   if (strncmp(SConfig::GetInstance().GetGameID().c_str(), header.gameID, 6))
   {
-    Core::DisplayMessage(
-        StringFromFormat("State belongs to a different game (ID %.*s)", 6, header.gameID), 2000);
+    Core::DisplayMessage(fmt::format("State belongs to a different game (ID {})",
+                                     std::string_view{header.gameID, std::size(header.gameID)}),
+                         2000);
     return;
   }
 
@@ -578,7 +599,7 @@ void LoadAs(const std::string& filename)
         {
           if (loadedSuccessfully)
           {
-            Core::DisplayMessage(StringFromFormat("Loaded state from %s", filename.c_str()), 2000);
+            Core::DisplayMessage(fmt::format("Loaded state from {}", filename), 2000);
             if (File::Exists(filename + ".dtm"))
               Movie::LoadInput(filename + ".dtm");
             else if (!Movie::IsJustStartingRecordingInputFromSaveState() &&
@@ -633,8 +654,8 @@ void Shutdown()
 
 static std::string MakeStateFilename(int number)
 {
-  return StringFromFormat("%s%s.s%02i", File::GetUserPath(D_STATESAVES_IDX).c_str(),
-                          SConfig::GetInstance().GetGameID().c_str(), number);
+  return fmt::format("{}{}.s{:02d}", File::GetUserPath(D_STATESAVES_IDX),
+                     SConfig::GetInstance().GetGameID(), number);
 }
 
 void Save(int slot, bool wait)

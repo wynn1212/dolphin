@@ -21,7 +21,9 @@
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
 #include "Common/StringUtil.h"
+#include "Common/Version.h"
 
+#include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/VideoConfig.h"
 
 namespace Vulkan::ShaderCompiler
@@ -105,8 +107,10 @@ static const char SUBGROUP_HELPER_HEADER[] = R"(
   #define SUBGROUP_MAX(value) value = subgroupMax(value)
 )";
 
-std::optional<SPIRVCodeVector> CompileShaderToSPV(EShLanguage stage, const char* stage_filename,
-                                                  std::string_view source, std::string_view header)
+static std::optional<SPIRVCodeVector> CompileShaderToSPV(EShLanguage stage,
+                                                         const char* stage_filename,
+                                                         std::string_view source,
+                                                         std::string_view header)
 {
   if (!InitializeGlslang())
     return std::nullopt;
@@ -142,9 +146,7 @@ std::optional<SPIRVCodeVector> CompileShaderToSPV(EShLanguage stage, const char*
 
   auto DumpBadShader = [&](const char* msg) {
     static int counter = 0;
-    std::string filename = StringFromFormat(
-        "%sbad_%s_%04i.txt", File::GetUserPath(D_DUMP_IDX).c_str(), stage_filename, counter++);
-
+    std::string filename = VideoBackendBase::BadShaderFilename(stage_filename, counter++);
     std::ofstream stream;
     File::OpenFStream(stream, filename, std::ios_base::out);
     if (stream.good())
@@ -161,6 +163,10 @@ std::optional<SPIRVCodeVector> CompileShaderToSPV(EShLanguage stage, const char*
         stream << program->getInfoDebugLog() << std::endl;
       }
     }
+
+    stream << "\n";
+    stream << "Dolphin Version: " + Common::scm_rev_str + "\n";
+    stream << "Video Backend: " + g_video_backend->GetDisplayName();
 
     PanicAlert("%s (written to %s)", msg, filename.c_str());
   };

@@ -17,6 +17,7 @@
 
 #include "DolphinQt/QtUtils/AspectRatioWidget.h"
 #include "DolphinQt/QtUtils/QueueOnObject.h"
+#include "DolphinQt/Resources.h"
 #include "DolphinQt/TAS/StickWidget.h"
 #include "DolphinQt/TAS/TASCheckBox.h"
 #include "DolphinQt/TAS/TASInputWindow.h"
@@ -26,6 +27,8 @@
 TASInputWindow::TASInputWindow(QWidget* parent) : QDialog(parent)
 {
   setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
+  setWindowIcon(Resources::GetAppIcon());
+
   m_use_controller = new QCheckBox(QStringLiteral("Enable Controller Inpu&t"));
   m_use_controller->setToolTip(tr("Warning: Analog inputs may reset to controller values at "
                                   "random. In some cases this can be fixed by adding a deadzone."));
@@ -51,10 +54,8 @@ QGroupBox* TASInputWindow::CreateStickInputs(QString name, QSpinBox*& x_value, Q
   y_value->setMaximumWidth(60);
 
   auto* visual = new StickWidget(this, max_x, max_y);
-  connect(x_value, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), visual,
-          &StickWidget::SetX);
-  connect(y_value, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), visual,
-          &StickWidget::SetY);
+  connect(x_value, qOverload<int>(&QSpinBox::valueChanged), visual, &StickWidget::SetX);
+  connect(y_value, qOverload<int>(&QSpinBox::valueChanged), visual, &StickWidget::SetY);
   connect(visual, &StickWidget::ChangedX, x_value, &QSpinBox::setValue);
   connect(visual, &StickWidget::ChangedY, y_value, &QSpinBox::setValue);
 
@@ -102,19 +103,17 @@ QSpinBox* TASInputWindow::CreateSliderValuePair(QBoxLayout* layout, u16 max,
 {
   auto* value = new QSpinBox();
   value->setRange(0, 99999);
-  connect(value, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged),
-          [value, max](int i) {
-            if (i > max)
-              value->setValue(max);
-          });
+  connect(value, qOverload<int>(&QSpinBox::valueChanged), [value, max](int i) {
+    if (i > max)
+      value->setValue(max);
+  });
   auto* slider = new QSlider(orientation);
   slider->setRange(0, max);
   slider->setFocusPolicy(Qt::ClickFocus);
   slider->setInvertedAppearance(invert);
 
   connect(slider, &QSlider::valueChanged, value, &QSpinBox::setValue);
-  connect(value, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), slider,
-          &QSlider::setValue);
+  connect(value, qOverload<int>(&QSpinBox::valueChanged), slider, &QSlider::setValue);
 
   auto* shortcut = new QShortcut(shortcut_key_sequence, shortcut_widget);
   connect(shortcut, &QShortcut::activated, [value] {

@@ -22,6 +22,7 @@
 #include <string>
 #include <tuple>
 
+#include <fmt/format.h>
 #include <imgui.h>
 
 #include "Common/Assert.h"
@@ -49,6 +50,8 @@
 #include "Core/Host.h"
 #include "Core/Movie.h"
 
+#include "InputCommon/ControllerInterface/ControllerInterface.h"
+
 #include "VideoCommon/AbstractFramebuffer.h"
 #include "VideoCommon/AbstractStagingTexture.h"
 #include "VideoCommon/AbstractTexture.h"
@@ -59,10 +62,12 @@
 #include "VideoCommon/FPSCounter.h"
 #include "VideoCommon/FrameDump.h"
 #include "VideoCommon/FramebufferManager.h"
+#include "VideoCommon/FramebufferShaderGen.h"
 #include "VideoCommon/ImageWrite.h"
 #include "VideoCommon/NetPlayChatUI.h"
 #include "VideoCommon/NetPlayGolfUI.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/OpcodeDecoding.h"
 #include "VideoCommon/PixelEngine.h"
 #include "VideoCommon/PixelShaderManager.h"
 #include "VideoCommon/PostProcessing.h"
@@ -97,7 +102,7 @@ Renderer::Renderer(int backbuffer_width, int backbuffer_height, float backbuffer
   UpdateDrawRectangle();
   CalculateTargetSize();
 
-  m_aspect_wide = SConfig::GetInstance().bWii && Config::Get(Config::SYSCONF_WIDESCREEN);
+  m_is_game_widescreen = SConfig::GetInstance().bWii && Config::Get(Config::SYSCONF_WIDESCREEN);
 }
 
 Renderer::~Renderer() = default;
@@ -116,6 +121,9 @@ bool Renderer::Initialize()
 
 void Renderer::Shutdown()
 {
+  // Disable ControllerInterface's aspect ratio adjustments so mapping dialog behaves normally.
+  g_controller_interface.SetAspectRatioAdjustment(1);
+
   // First stop any framedumping, which might need to dump the last xfb frame. This process
   // can require additional graphics sub-systems so it needs to be done first
   ShutdownFrameDumping();
@@ -442,6 +450,13 @@ void Renderer::CheckForConfigChanges()
   // Notify the backend of the changes, if any.
   OnConfigChanged(changed_bits);
 
+  // If there's any shader changes, wait for the GPU to finish before destroying anything.
+  if (changed_bits & (CONFIG_CHANGE_BIT_HOST_CONFIG | CONFIG_CHANGE_BIT_MULTISAMPLES))
+  {
+    WaitForGPUIdle();
+    SetPipeline(nullptr);
+  }
+
   // Framebuffer changed?
   if (changed_bits & (CONFIG_CHANGE_BIT_MULTISAMPLES | CONFIG_CHANGE_BIT_STEREO_MODE |
                       CONFIG_CHANGE_BIT_TARGET_SIZE))
@@ -453,8 +468,6 @@ void Renderer::CheckForConfigChanges()
   if (changed_bits & (CONFIG_CHANGE_BIT_HOST_CONFIG | CONFIG_CHANGE_BIT_MULTISAMPLES))
   {
     OSD::AddMessage("Video config changed, reloading shaders.", OSD::Duration::NORMAL);
-    WaitForGPUIdle();
-    SetPipeline(nullptr);
     g_vertex_manager->InvalidatePipelineObject();
     g_shader_cache->SetHostConfig(new_host_config);
     g_shader_cache->Reload();
@@ -466,6 +479,14 @@ void Renderer::CheckForConfigChanges()
   {
     BPFunctions::SetViewport();
     BPFunctions::SetScissor();
+  }
+
+  // Stereo mode change requires recompiling our post processing pipeline and imgui pipelines for
+  // rendering the UI.
+  if (changed_bits & CONFIG_CHANGE_BIT_STEREO_MODE)
+  {
+    RecompileImGuiPipeline();
+    m_post_processor->RecompilePipeline();
   }
 }
 
@@ -540,22 +561,21 @@ void Renderer::DrawDebugText()
 
 float Renderer::CalculateDrawAspectRatio() const
 {
-  if (g_ActiveConfig.aspect_mode == AspectMode::Stretch)
-  {
-    // If stretch is enabled, we prefer the aspect ratio of the window.
+  const auto aspect_mode = g_ActiveConfig.aspect_mode;
+
+  // If stretch is enabled, we prefer the aspect ratio of the window.
+  if (aspect_mode == AspectMode::Stretch)
     return (static_cast<float>(m_backbuffer_width) / static_cast<float>(m_backbuffer_height));
+
+  const float aspect_ratio = VideoInterface::GetAspectRatio();
+
+  if (aspect_mode == AspectMode::AnalogWide ||
+      (aspect_mode == AspectMode::Auto && m_is_game_widescreen))
+  {
+    return AspectToWidescreen(aspect_ratio);
   }
 
-  // The rendering window aspect ratio as a proportion of the 4:3 or 16:9 ratio
-  if (g_ActiveConfig.aspect_mode == AspectMode::AnalogWide ||
-      (g_ActiveConfig.aspect_mode != AspectMode::Analog && m_aspect_wide))
-  {
-    return AspectToWidescreen(VideoInterface::GetAspectRatio());
-  }
-  else
-  {
-    return VideoInterface::GetAspectRatio();
-  }
+  return aspect_ratio;
 }
 
 void Renderer::AdjustRectanglesToFitBounds(MathUtil::Rectangle<int>* target_rect,
@@ -707,9 +727,7 @@ std::tuple<float, float> Renderer::ScaleToDisplayAspectRatio(const int width,
 
 void Renderer::UpdateDrawRectangle()
 {
-  // The rendering window size
-  const float win_width = static_cast<float>(m_backbuffer_width);
-  const float win_height = static_cast<float>(m_backbuffer_height);
+  const float draw_aspect_ratio = CalculateDrawAspectRatio();
 
   // Update aspect ratio hack values
   // Won't take effect until next frame
@@ -717,28 +735,10 @@ void Renderer::UpdateDrawRectangle()
   if (g_ActiveConfig.bWidescreenHack)
   {
     float source_aspect = VideoInterface::GetAspectRatio();
-    if (m_aspect_wide)
+    if (m_is_game_widescreen)
       source_aspect = AspectToWidescreen(source_aspect);
-    float target_aspect = 0.0f;
 
-    switch (g_ActiveConfig.aspect_mode)
-    {
-    case AspectMode::Stretch:
-      target_aspect = win_width / win_height;
-      break;
-    case AspectMode::Analog:
-      target_aspect = VideoInterface::GetAspectRatio();
-      break;
-    case AspectMode::AnalogWide:
-      target_aspect = AspectToWidescreen(VideoInterface::GetAspectRatio());
-      break;
-    case AspectMode::Auto:
-    default:
-      target_aspect = source_aspect;
-      break;
-    }
-
-    float adjust = source_aspect / target_aspect;
+    const float adjust = source_aspect / draw_aspect_ratio;
     if (adjust > 1)
     {
       // Vert+
@@ -754,35 +754,24 @@ void Renderer::UpdateDrawRectangle()
   }
   else
   {
-    // Hack is disabled
+    // Hack is disabled.
     g_Config.fAspectRatioHackW = 1;
     g_Config.fAspectRatioHackH = 1;
   }
 
-  float draw_width, draw_height, crop_width, crop_height;
+  // The rendering window size
+  const float win_width = static_cast<float>(m_backbuffer_width);
+  const float win_height = static_cast<float>(m_backbuffer_height);
 
-  // get the picture aspect ratio
-  draw_width = crop_width = CalculateDrawAspectRatio();
-  draw_height = crop_height = 1;
+  // Make ControllerInterface aware of the render window region actually being used
+  // to adjust mouse cursor inputs.
+  g_controller_interface.SetAspectRatioAdjustment(draw_aspect_ratio / (win_width / win_height));
 
-  // crop the picture to a standard aspect ratio
-  if (g_ActiveConfig.bCrop && g_ActiveConfig.aspect_mode != AspectMode::Stretch)
-  {
-    float expected_aspect = (g_ActiveConfig.aspect_mode == AspectMode::AnalogWide ||
-                             (g_ActiveConfig.aspect_mode != AspectMode::Analog && m_aspect_wide)) ?
-                                (16.0f / 9.0f) :
-                                (4.0f / 3.0f);
-    if (crop_width / crop_height >= expected_aspect)
-    {
-      // the picture is flatter than it should be
-      crop_width = crop_height * expected_aspect;
-    }
-    else
-    {
-      // the picture is skinnier than it should be
-      crop_height = crop_width / expected_aspect;
-    }
-  }
+  float draw_width = draw_aspect_ratio;
+  float draw_height = 1;
+
+  // Crop the picture to a standard aspect ratio. (if enabled)
+  auto [crop_width, crop_height] = ApplyStandardAspectCrop(draw_width, draw_height);
 
   // scale the picture to fit the rendering window
   if (win_width / win_height >= crop_width / crop_height)
@@ -825,6 +814,34 @@ void Renderer::SetWindowSize(int width, int height)
   Host_RequestRenderWindowSize(out_width, out_height);
 }
 
+// Crop to exactly 16:9 or 4:3 if enabled and not AspectMode::Stretch.
+std::tuple<float, float> Renderer::ApplyStandardAspectCrop(float width, float height) const
+{
+  const auto aspect_mode = g_ActiveConfig.aspect_mode;
+
+  if (!g_ActiveConfig.bCrop || aspect_mode == AspectMode::Stretch)
+    return {width, height};
+
+  // Force 4:3 or 16:9 by cropping the image.
+  const float current_aspect = width / height;
+  const float expected_aspect = (aspect_mode == AspectMode::AnalogWide ||
+                                 (aspect_mode == AspectMode::Auto && m_is_game_widescreen)) ?
+                                    (16.0f / 9.0f) :
+                                    (4.0f / 3.0f);
+  if (current_aspect > expected_aspect)
+  {
+    // keep height, crop width
+    width = height * expected_aspect;
+  }
+  else
+  {
+    // keep width, crop height
+    height = width / expected_aspect;
+  }
+
+  return {width, height};
+}
+
 std::tuple<int, int> Renderer::CalculateOutputDimensions(int width, int height) const
 {
   width = std::max(width, 1);
@@ -832,25 +849,8 @@ std::tuple<int, int> Renderer::CalculateOutputDimensions(int width, int height) 
 
   auto [scaled_width, scaled_height] = ScaleToDisplayAspectRatio(width, height);
 
-  if (g_ActiveConfig.bCrop)
-  {
-    // Force 4:3 or 16:9 by cropping the image.
-    float current_aspect = scaled_width / scaled_height;
-    float expected_aspect = (g_ActiveConfig.aspect_mode == AspectMode::AnalogWide ||
-                             (g_ActiveConfig.aspect_mode != AspectMode::Analog && m_aspect_wide)) ?
-                                (16.0f / 9.0f) :
-                                (4.0f / 3.0f);
-    if (current_aspect > expected_aspect)
-    {
-      // keep height, crop width
-      scaled_width = scaled_height * expected_aspect;
-    }
-    else
-    {
-      // keep width, crop height
-      scaled_height = scaled_width / expected_aspect;
-    }
-  }
+  // Apply crop if enabled.
+  std::tie(scaled_width, scaled_height) = ApplyStandardAspectCrop(scaled_width, scaled_height);
 
   width = static_cast<int>(std::ceil(scaled_width));
   height = static_cast<int>(std::ceil(scaled_height));
@@ -865,19 +865,18 @@ std::tuple<int, int> Renderer::CalculateOutputDimensions(int width, int height) 
 
 void Renderer::CheckFifoRecording()
 {
-  bool wasRecording = g_bRecordFifoData;
-  g_bRecordFifoData = FifoRecorder::GetInstance().IsRecording();
+  const bool was_recording = OpcodeDecoder::g_record_fifo_data;
+  OpcodeDecoder::g_record_fifo_data = FifoRecorder::GetInstance().IsRecording();
 
-  if (g_bRecordFifoData)
+  if (!OpcodeDecoder::g_record_fifo_data)
+    return;
+
+  if (!was_recording)
   {
-    if (!wasRecording)
-    {
-      RecordVideoMemory();
-    }
-
-    FifoRecorder::GetInstance().EndFrame(CommandProcessor::fifo.CPBase,
-                                         CommandProcessor::fifo.CPEnd);
+    RecordVideoMemory();
   }
+
+  FifoRecorder::GetInstance().EndFrame(CommandProcessor::fifo.CPBase, CommandProcessor::fifo.CPEnd);
 }
 
 void Renderer::RecordVideoMemory()
@@ -894,90 +893,6 @@ void Renderer::RecordVideoMemory()
 
   FifoRecorder::GetInstance().SetVideoMemory(bpmem_ptr, cpmem, xfmem_ptr, xfregs_ptr, xfregs_size,
                                              texMem);
-}
-
-static std::string GenerateImGuiVertexShader()
-{
-  const APIType api_type = g_ActiveConfig.backend_info.api_type;
-  std::stringstream ss;
-
-  // Uniform buffer contains the viewport size, and we transform in the vertex shader.
-  if (api_type == APIType::D3D)
-    ss << "cbuffer PSBlock : register(b0) {\n";
-  else if (api_type == APIType::OpenGL)
-    ss << "UBO_BINDING(std140, 1) uniform PSBlock {\n";
-  else if (api_type == APIType::Vulkan)
-    ss << "UBO_BINDING(std140, 1) uniform PSBlock {\n";
-  ss << "float2 u_rcp_viewport_size_mul2;\n";
-  ss << "};\n";
-
-  if (api_type == APIType::D3D)
-  {
-    ss << "void main(in float2 rawpos : POSITION,\n"
-       << "          in float2 rawtex0 : TEXCOORD,\n"
-       << "          in float4 rawcolor0 : COLOR,\n"
-       << "          out float2 frag_uv : TEXCOORD,\n"
-       << "          out float4 frag_color : COLOR,\n"
-       << "          out float4 out_pos : SV_Position)\n";
-  }
-  else
-  {
-    ss << "ATTRIBUTE_LOCATION(" << SHADER_POSITION_ATTRIB << ") in float2 rawpos;\n"
-       << "ATTRIBUTE_LOCATION(" << SHADER_TEXTURE0_ATTRIB << ") in float2 rawtex0;\n"
-       << "ATTRIBUTE_LOCATION(" << SHADER_COLOR0_ATTRIB << ") in float4 rawcolor0;\n"
-       << "VARYING_LOCATION(0) out float2 frag_uv;\n"
-       << "VARYING_LOCATION(1) out float4 frag_color;\n"
-       << "void main()\n";
-  }
-
-  ss << "{\n"
-     << "  frag_uv = rawtex0;\n"
-     << "  frag_color = rawcolor0;\n";
-
-  ss << "  " << (api_type == APIType::D3D ? "out_pos" : "gl_Position")
-     << "= float4(rawpos.x * u_rcp_viewport_size_mul2.x - 1.0, 1.0 - rawpos.y * "
-        "u_rcp_viewport_size_mul2.y, 0.0, 1.0);\n";
-
-  // Clip-space is flipped in Vulkan
-  if (api_type == APIType::Vulkan)
-    ss << "  gl_Position.y = -gl_Position.y;\n";
-
-  ss << "}\n";
-  return ss.str();
-}
-
-static std::string GenerateImGuiPixelShader()
-{
-  const APIType api_type = g_ActiveConfig.backend_info.api_type;
-
-  std::stringstream ss;
-  if (api_type == APIType::D3D)
-  {
-    ss << "Texture2DArray tex0 : register(t0);\n"
-       << "SamplerState samp0 : register(s0);\n"
-       << "void main(in float2 frag_uv : TEXCOORD,\n"
-       << "          in float4 frag_color : COLOR,\n"
-       << "          out float4 ocol0 : SV_Target)\n";
-  }
-  else
-  {
-    ss << "SAMPLER_BINDING(0) uniform sampler2DArray samp0;\n"
-       << "VARYING_LOCATION(0) in float2 frag_uv; \n"
-       << "VARYING_LOCATION(1) in float4 frag_color;\n"
-       << "FRAGMENT_OUTPUT_LOCATION(0) out float4 ocol0;\n"
-       << "void main()\n";
-  }
-
-  ss << "{\n";
-
-  if (api_type == APIType::D3D)
-    ss << "  ocol0 = tex0.Sample(samp0, float3(frag_uv, 0.0)) * frag_color;\n";
-  else
-    ss << "  ocol0 = texture(samp0, float3(frag_uv, 0.0)) * frag_color;\n";
-
-  ss << "}\n";
-
-  return ss.str();
 }
 
 bool Renderer::InitializeImGui()
@@ -1007,42 +922,6 @@ bool Renderer::InitializeImGui()
     return false;
   }
 
-  const std::string vertex_shader_source = GenerateImGuiVertexShader();
-  const std::string pixel_shader_source = GenerateImGuiPixelShader();
-  std::unique_ptr<AbstractShader> vertex_shader =
-      CreateShaderFromSource(ShaderStage::Vertex, vertex_shader_source);
-  std::unique_ptr<AbstractShader> pixel_shader =
-      CreateShaderFromSource(ShaderStage::Pixel, pixel_shader_source);
-  if (!vertex_shader || !pixel_shader)
-  {
-    PanicAlert("Failed to compile imgui shaders");
-    return false;
-  }
-
-  AbstractPipelineConfig pconfig = {};
-  pconfig.vertex_format = m_imgui_vertex_format.get();
-  pconfig.vertex_shader = vertex_shader.get();
-  pconfig.pixel_shader = pixel_shader.get();
-  pconfig.rasterization_state = RenderState::GetNoCullRasterizationState(PrimitiveType::Triangles);
-  pconfig.depth_state = RenderState::GetNoDepthTestingDepthState();
-  pconfig.blending_state = RenderState::GetNoBlendingBlendState();
-  pconfig.blending_state.blendenable = true;
-  pconfig.blending_state.srcfactor = BlendMode::SRCALPHA;
-  pconfig.blending_state.dstfactor = BlendMode::INVSRCALPHA;
-  pconfig.blending_state.srcfactoralpha = BlendMode::ZERO;
-  pconfig.blending_state.dstfactoralpha = BlendMode::ONE;
-  pconfig.framebuffer_state.color_texture_format = m_backbuffer_format;
-  pconfig.framebuffer_state.depth_texture_format = AbstractTextureFormat::Undefined;
-  pconfig.framebuffer_state.samples = 1;
-  pconfig.framebuffer_state.per_sample_shading = false;
-  pconfig.usage = AbstractPipelineUsage::Utility;
-  m_imgui_pipeline = CreatePipeline(pconfig);
-  if (!m_imgui_pipeline)
-  {
-    PanicAlert("Failed to create imgui pipeline");
-    return false;
-  }
-
   // Font texture(s).
   {
     ImGuiIO& io = ImGui::GetIO();
@@ -1066,8 +945,64 @@ bool Renderer::InitializeImGui()
     m_imgui_textures.push_back(std::move(font_tex));
   }
 
+  if (!RecompileImGuiPipeline())
+    return false;
+
   m_imgui_last_frame_time = Common::Timer::GetTimeUs();
   BeginImGuiFrame();
+  return true;
+}
+
+bool Renderer::RecompileImGuiPipeline()
+{
+  std::unique_ptr<AbstractShader> vertex_shader = CreateShaderFromSource(
+      ShaderStage::Vertex, FramebufferShaderGen::GenerateImGuiVertexShader());
+  std::unique_ptr<AbstractShader> pixel_shader =
+      CreateShaderFromSource(ShaderStage::Pixel, FramebufferShaderGen::GenerateImGuiPixelShader());
+  if (!vertex_shader || !pixel_shader)
+  {
+    PanicAlert("Failed to compile imgui shaders");
+    return false;
+  }
+
+  // GS is used to render the UI to both eyes in stereo modes.
+  std::unique_ptr<AbstractShader> geometry_shader;
+  if (UseGeometryShaderForUI())
+  {
+    geometry_shader = CreateShaderFromSource(
+        ShaderStage::Geometry, FramebufferShaderGen::GeneratePassthroughGeometryShader(1, 1));
+    if (!geometry_shader)
+    {
+      PanicAlert("Failed to compile imgui geometry shader");
+      return false;
+    }
+  }
+
+  AbstractPipelineConfig pconfig = {};
+  pconfig.vertex_format = m_imgui_vertex_format.get();
+  pconfig.vertex_shader = vertex_shader.get();
+  pconfig.geometry_shader = geometry_shader.get();
+  pconfig.pixel_shader = pixel_shader.get();
+  pconfig.rasterization_state = RenderState::GetNoCullRasterizationState(PrimitiveType::Triangles);
+  pconfig.depth_state = RenderState::GetNoDepthTestingDepthState();
+  pconfig.blending_state = RenderState::GetNoBlendingBlendState();
+  pconfig.blending_state.blendenable = true;
+  pconfig.blending_state.srcfactor = BlendMode::SRCALPHA;
+  pconfig.blending_state.dstfactor = BlendMode::INVSRCALPHA;
+  pconfig.blending_state.srcfactoralpha = BlendMode::ZERO;
+  pconfig.blending_state.dstfactoralpha = BlendMode::ONE;
+  pconfig.framebuffer_state.color_texture_format = m_backbuffer_format;
+  pconfig.framebuffer_state.depth_texture_format = AbstractTextureFormat::Undefined;
+  pconfig.framebuffer_state.samples = 1;
+  pconfig.framebuffer_state.per_sample_shading = false;
+  pconfig.usage = AbstractPipelineUsage::Utility;
+  m_imgui_pipeline = CreatePipeline(pconfig);
+  if (!m_imgui_pipeline)
+  {
+    PanicAlert("Failed to create imgui pipeline");
+    return false;
+  }
+
   return true;
 }
 
@@ -1160,6 +1095,15 @@ void Renderer::DrawImGui()
       m_current_framebuffer));
 }
 
+bool Renderer::UseGeometryShaderForUI() const
+{
+  // OpenGL doesn't render to a 2-layer backbuffer like D3D/Vulkan for quad-buffered stereo,
+  // instead drawing twice and the eye selected by glDrawBuffer() (see
+  // OGL::Renderer::RenderXFBToScreen).
+  return g_ActiveConfig.stereo_mode == StereoMode::QuadBuffer &&
+         g_ActiveConfig.backend_info.api_type != APIType::OpenGL;
+}
+
 std::unique_lock<std::mutex> Renderer::GetImGuiLock()
 {
   return std::unique_lock<std::mutex>(m_imgui_mutex);
@@ -1193,30 +1137,78 @@ void Renderer::EndUIFrame()
   BeginImGuiFrame();
 }
 
+// Heuristic to detect if a GameCube game is in 16:9 anamorphic widescreen mode.
+void Renderer::UpdateWidescreenHeuristic()
+{
+  // VertexManager maintains no statistics in Wii mode.
+  if (SConfig::GetInstance().bWii)
+    return;
+
+  const auto flush_statistics = g_vertex_manager->ResetFlushAspectRatioCount();
+
+  // If suggested_aspect_mode (GameINI) is configured don't use heuristic.
+  if (g_ActiveConfig.suggested_aspect_mode != AspectMode::Auto)
+    return;
+
+  // If widescreen hack isn't active and aspect_mode (UI) is 4:3 or 16:9 don't use heuristic.
+  if (!g_ActiveConfig.bWidescreenHack && (g_ActiveConfig.aspect_mode == AspectMode::Analog ||
+                                          g_ActiveConfig.aspect_mode == AspectMode::AnalogWide))
+    return;
+
+  // Modify the threshold based on which aspect ratio we're already using:
+  // If the game's in 4:3, it probably won't switch to anamorphic, and vice-versa.
+  static constexpr u32 TRANSITION_THRESHOLD = 3;
+
+  const auto looks_normal = [](auto& counts) {
+    return counts.normal_vertex_count > counts.anamorphic_vertex_count * TRANSITION_THRESHOLD;
+  };
+  const auto looks_anamorphic = [](auto& counts) {
+    return counts.anamorphic_vertex_count > counts.normal_vertex_count * TRANSITION_THRESHOLD;
+  };
+
+  const auto& persp = flush_statistics.perspective;
+  const auto& ortho = flush_statistics.orthographic;
+
+  const auto ortho_looks_anamorphic = looks_anamorphic(ortho);
+
+  if (looks_anamorphic(persp) || ortho_looks_anamorphic)
+  {
+    // If either perspective or orthographic projections look anamorphic, it's a safe bet.
+    m_is_game_widescreen = true;
+  }
+  else if (looks_normal(persp) || (m_was_orthographically_anamorphic && looks_normal(ortho)))
+  {
+    // Many widescreen games (or AR/GeckoCodes) use anamorphic perspective projections
+    // with NON-anamorphic orthographic projections.
+    // This can cause incorrect changes to 4:3 when perspective projections are temporarily not
+    // shown. e.g. Animal Crossing's inventory menu.
+    // Unless we were in a sitation which was orthographically anamorphic
+    // we won't consider orthographic data for changes from 16:9 to 4:3.
+    m_is_game_widescreen = false;
+  }
+
+  m_was_orthographically_anamorphic = ortho_looks_anamorphic;
+}
+
 void Renderer::Swap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u64 ticks)
 {
-  const AspectMode suggested = g_ActiveConfig.suggested_aspect_mode;
-  if (suggested == AspectMode::Analog || suggested == AspectMode::AnalogWide)
-  {
-    m_aspect_wide = suggested == AspectMode::AnalogWide;
-  }
-  else if (SConfig::GetInstance().bWii)
-  {
-    m_aspect_wide = Config::Get(Config::SYSCONF_WIDESCREEN);
-  }
-  else
-  {
-    // Heuristic to detect if a GameCube game is in 16:9 anamorphic widescreen mode.
-    const auto [flush_count_4_3, flush_count_anamorphic] =
-        g_vertex_manager->ResetFlushAspectRatioCount();
-    const size_t flush_total = flush_count_4_3 + flush_count_anamorphic;
+  if (SConfig::GetInstance().bWii)
+    m_is_game_widescreen = Config::Get(Config::SYSCONF_WIDESCREEN);
 
-    // Modify the threshold based on which aspect ratio we're already using: if
-    // the game's in 4:3, it probably won't switch to anamorphic, and vice-versa.
-    if (m_aspect_wide)
-      m_aspect_wide = !(flush_count_4_3 > 0.75 * flush_total);
-    else
-      m_aspect_wide = flush_count_anamorphic > 0.75 * flush_total;
+  // suggested_aspect_mode overrides SYSCONF_WIDESCREEN
+  if (g_ActiveConfig.suggested_aspect_mode == AspectMode::Analog)
+    m_is_game_widescreen = false;
+  else if (g_ActiveConfig.suggested_aspect_mode == AspectMode::AnalogWide)
+    m_is_game_widescreen = true;
+
+  // If widescreen hack is disabled override game's AR if UI is set to 4:3 or 16:9.
+  if (!g_ActiveConfig.bWidescreenHack)
+  {
+    const auto aspect_mode = g_ActiveConfig.aspect_mode;
+    if (aspect_mode == AspectMode::Analog)
+      m_is_game_widescreen = false;
+    else if (aspect_mode == AspectMode::AnalogWide)
+      m_is_game_widescreen = true;
   }
 
   // Ensure the last frame was written to the dump.
@@ -1230,8 +1222,10 @@ void Renderer::Swap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u6
     MathUtil::Rectangle<int> xfb_rect;
     const auto* xfb_entry =
         g_texture_cache->GetXFBTexture(xfb_addr, fb_width, fb_height, fb_stride, &xfb_rect);
-    if (xfb_entry && xfb_entry->id != m_last_xfb_id)
+    if (xfb_entry &&
+        (!g_ActiveConfig.bSkipPresentingDuplicateXFBs || xfb_entry->id != m_last_xfb_id))
     {
+      const bool is_duplicate_frame = xfb_entry->id == m_last_xfb_id;
       m_last_xfb_id = xfb_entry->id;
 
       // Since we use the common pipelines here and draw vertices if a batch is currently being
@@ -1253,6 +1247,10 @@ void Renderer::Swap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u6
       if (!IsHeadless())
       {
         BindBackbuffer({{0.0f, 0.0f, 0.0f, 1.0f}});
+
+        if (!is_duplicate_frame)
+          UpdateWidescreenHeuristic();
+
         UpdateDrawRectangle();
 
         // Adjust the source rectangle instead of using an oversized viewport to render the XFB.
@@ -1275,20 +1273,24 @@ void Renderer::Swap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u6
         SetWindowSize(xfb_rect.GetWidth(), xfb_rect.GetHeight());
       }
 
-      m_fps_counter.Update();
+      if (!is_duplicate_frame)
+      {
+        m_fps_counter.Update();
 
-      DolphinAnalytics::PerformanceSample perf_sample;
-      perf_sample.speed_ratio = SystemTimers::GetEstimatedEmulationPerformance();
-      perf_sample.num_prims = g_stats.this_frame.num_prims + g_stats.this_frame.num_dl_prims;
-      perf_sample.num_draw_calls = g_stats.this_frame.num_draw_calls;
-      DolphinAnalytics::Instance().ReportPerformanceInfo(std::move(perf_sample));
+        DolphinAnalytics::PerformanceSample perf_sample;
+        perf_sample.speed_ratio = SystemTimers::GetEstimatedEmulationPerformance();
+        perf_sample.num_prims = g_stats.this_frame.num_prims + g_stats.this_frame.num_dl_prims;
+        perf_sample.num_draw_calls = g_stats.this_frame.num_draw_calls;
+        DolphinAnalytics::Instance().ReportPerformanceInfo(std::move(perf_sample));
 
-      if (IsFrameDumping())
-        DumpCurrentFrame(xfb_entry->texture.get(), xfb_rect, ticks);
+        if (IsFrameDumping())
+          DumpCurrentFrame(xfb_entry->texture.get(), xfb_rect, ticks);
 
-      // Begin new frame
-      m_frame_count++;
-      g_stats.ResetFrame();
+        // Begin new frame
+        m_frame_count++;
+        g_stats.ResetFrame();
+      }
+
       g_shader_cache->RetrieveAsyncShaders();
       g_vertex_manager->OnEndFrame();
       BeginImGuiFrame();
@@ -1303,16 +1305,18 @@ void Renderer::Swap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u6
       // rate and not waiting for vblank. Otherwise, we'd end up with a huge list of pending copies.
       g_texture_cache->FlushEFBCopies();
 
-      // Remove stale EFB/XFB copies.
-      g_texture_cache->Cleanup(m_frame_count);
+      if (!is_duplicate_frame)
+      {
+        // Remove stale EFB/XFB copies.
+        g_texture_cache->Cleanup(m_frame_count);
+        Core::Callback_FramePresented();
+      }
 
       // Handle any config changes, this gets propogated to the backend.
       CheckForConfigChanges();
       g_Config.iSaveTargetId = 0;
 
       EndUtilityDrawing();
-
-      Core::Callback_VideoCopiedToXFB(true);
     }
     else
     {
@@ -1630,8 +1634,8 @@ void Renderer::StopFrameDumpToFFMPEG()
 
 std::string Renderer::GetFrameDumpNextImageFileName() const
 {
-  return StringFromFormat("%sframedump_%u.png", File::GetUserPath(D_DUMPFRAMES_IDX).c_str(),
-                          m_frame_dump_image_counter);
+  return fmt::format("{}framedump_{}.png", File::GetUserPath(D_DUMPFRAMES_IDX),
+                     m_frame_dump_image_counter);
 }
 
 bool Renderer::StartFrameDumpToImage(const FrameDumpConfig& config)
@@ -1681,7 +1685,7 @@ bool Renderer::UseVertexDepthRange() const
 
 void Renderer::DoState(PointerWrap& p)
 {
-  p.Do(m_aspect_wide);
+  p.Do(m_is_game_widescreen);
   p.Do(m_frame_count);
   p.Do(m_prev_efb_format);
   p.Do(m_last_xfb_ticks);
@@ -1694,6 +1698,8 @@ void Renderer::DoState(PointerWrap& p)
   {
     // Force the next xfb to be displayed.
     m_last_xfb_id = std::numeric_limits<u64>::max();
+
+    m_was_orthographically_anamorphic = false;
 
     // And actually display it.
     Swap(m_last_xfb_addr, m_last_xfb_width, m_last_xfb_stride, m_last_xfb_height, m_last_xfb_ticks);

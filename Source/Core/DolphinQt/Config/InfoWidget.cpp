@@ -10,7 +10,6 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
-#include <QProgressDialog>
 #include <QPushButton>
 #include <QTextEdit>
 
@@ -73,7 +72,7 @@ QGroupBox* InfoWidget::CreateISODetails()
 
   QLineEdit* country = CreateValueDisplay(DiscIO::GetName(m_game.GetCountry(), true));
 
-  const std::string game_maker = m_game.GetMaker();
+  const std::string game_maker = m_game.GetMaker(UICommon::GameFile::Variant::LongAndNotCustom);
 
   QLineEdit* maker =
       CreateValueDisplay((game_maker.empty() ? UNKNOWN_NAME.toStdString() : game_maker) + " (" +
@@ -176,8 +175,7 @@ void InfoWidget::CreateLanguageSelector()
   if (m_language_selector->count() == 1)
     m_language_selector->setDisabled(true);
 
-  connect(m_language_selector,
-          static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
+  connect(m_language_selector, qOverload<int>(&QComboBox::currentIndexChanged), this,
           &InfoWidget::ChangeLanguage);
 }
 

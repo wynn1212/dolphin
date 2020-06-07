@@ -50,11 +50,12 @@ enum class ShaderStage;
 enum class EFBAccessType;
 enum class EFBReinterpretType;
 enum class StagingTextureType;
+enum class AspectMode;
 
 namespace VideoCommon
 {
 class PostProcessing;
-}
+}  // namespace VideoCommon
 
 struct EfbPokeData
 {
@@ -181,6 +182,8 @@ public:
   std::tuple<float, float> ScaleToDisplayAspectRatio(int width, int height) const;
   void UpdateDrawRectangle();
 
+  std::tuple<float, float> ApplyStandardAspectCrop(float width, float height) const;
+
   // Use this to convert a single target rectangle to two stereo rectangles
   std::tuple<MathUtil::Rectangle<int>, MathUtil::Rectangle<int>>
   ConvertStereoRectangle(const MathUtil::Rectangle<int>& rc) const;
@@ -198,9 +201,6 @@ public:
   // Random utilities
   void SaveScreenshot(std::string filename, bool wait_for_completion);
   void DrawDebugText();
-
-  // ImGui initialization depends on being able to create textures and pipelines, so do it last.
-  bool InitializeImGui();
 
   virtual void ClearScreen(const MathUtil::Rectangle<int>& rc, bool colorEnable, bool alphaEnable,
                            bool zEnable, u32 color, u32 z);
@@ -220,6 +220,8 @@ public:
 
   // Finish up the current frame, print some stats
   void Swap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u64 ticks);
+
+  void UpdateWidescreenHeuristic();
 
   // Draws the specified XFB buffer to the screen, performing any post-processing.
   // Assumes that the backbuffer has already been bound and cleared.
@@ -242,6 +244,10 @@ public:
   void DoState(PointerWrap& p);
 
   virtual std::unique_ptr<VideoCommon::AsyncShaderCompiler> CreateAsyncShaderCompiler();
+
+  // Returns true if a layer-expanding geometry shader should be used when rendering the user
+  // interface and final XFB.
+  bool UseGeometryShaderForUI() const;
 
   // Returns a lock for the ImGui mutex, enabling data structures to be modified from outside.
   // Use with care, only non-drawing functions should be called from outside the video thread,
@@ -275,6 +281,12 @@ protected:
   void CheckFifoRecording();
   void RecordVideoMemory();
 
+  // ImGui initialization depends on being able to create textures and pipelines, so do it last.
+  bool InitializeImGui();
+
+  // Recompiles ImGui pipeline - call when stereo mode changes.
+  bool RecompileImGuiPipeline();
+
   // Sets up ImGui state for the next frame.
   // This function itself acquires the ImGui lock, so it should not be held.
   void BeginImGuiFrame();
@@ -293,7 +305,9 @@ protected:
   Common::Event m_screenshot_completed;
   std::mutex m_screenshot_lock;
   std::string m_screenshot_name;
-  bool m_aspect_wide = false;
+
+  bool m_is_game_widescreen = false;
+  bool m_was_orthographically_anamorphic = false;
 
   // The framebuffer size
   int m_target_width = 1;

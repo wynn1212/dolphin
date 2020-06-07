@@ -17,6 +17,7 @@
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 
+#include "DolphinQt/Host.h"
 #include "DolphinQt/QtUtils/ModalMessageBox.h"
 #include "DolphinQt/Resources.h"
 #include "DolphinQt/Settings.h"
@@ -32,6 +33,8 @@ WatchWidget::WatchWidget(QWidget* parent) : QDockWidget(parent)
 
   setAllowedAreas(Qt::AllDockWidgetAreas);
 
+  CreateWidgets();
+
   auto& settings = Settings::GetQSettings();
 
   restoreGeometry(settings.value(QStringLiteral("watchwidget/geometry")).toByteArray());
@@ -39,7 +42,6 @@ WatchWidget::WatchWidget(QWidget* parent) : QDockWidget(parent)
   // according to Settings
   setFloating(settings.value(QStringLiteral("watchwidget/floating")).toBool());
 
-  CreateWidgets();
   ConnectWidgets();
 
   connect(&Settings::Instance(), &Settings::EmulationStateChanged, [this](Core::State state) {
@@ -47,6 +49,8 @@ WatchWidget::WatchWidget(QWidget* parent) : QDockWidget(parent)
     if (state != Core::State::Starting)
       Update();
   });
+
+  connect(Host::GetInstance(), &Host::UpdateDisasmDialog, this, &WatchWidget::Update);
 
   connect(&Settings::Instance(), &Settings::WatchVisibilityChanged,
           [this](bool visible) { setHidden(!visible); });
@@ -73,6 +77,7 @@ void WatchWidget::CreateWidgets()
   m_toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 
   m_table = new QTableWidget;
+  m_table->setTabKeyNavigation(false);
 
   m_table->setContentsMargins(0, 0, 0, 0);
   m_table->setColumnCount(NUM_COLUMNS);
@@ -343,4 +348,5 @@ void WatchWidget::AddWatchBreakpoint(int row)
 void WatchWidget::AddWatch(QString name, u32 addr)
 {
   PowerPC::debug_interface.SetWatch(addr, name.toStdString());
+  Update();
 }

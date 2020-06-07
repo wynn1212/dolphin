@@ -19,6 +19,7 @@
 #include "Common/Config/Config.h"
 #include "Common/StringUtil.h"
 
+#include "Core/Config/MainSettings.h"
 #include "Core/Config/SYSCONFSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -48,6 +49,7 @@ WiiPane::WiiPane(QWidget* parent) : QWidget(parent)
   LoadConfig();
   ConnectLayout();
   ValidateSelectionState();
+  OnEmulationStateChanged(Core::GetState() != Core::State::Uninitialized);
 }
 
 void WiiPane::CreateLayout()
@@ -63,15 +65,14 @@ void WiiPane::CreateLayout()
 void WiiPane::ConnectLayout()
 {
   // Misc Settings
-  connect(m_aspect_ratio_choice,
-          static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
+  connect(m_aspect_ratio_choice, qOverload<int>(&QComboBox::currentIndexChanged), this,
           &WiiPane::OnSaveConfig);
-  connect(m_system_language_choice,
-          static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
+  connect(m_system_language_choice, qOverload<int>(&QComboBox::currentIndexChanged), this,
           &WiiPane::OnSaveConfig);
   connect(m_screensaver_checkbox, &QCheckBox::toggled, this, &WiiPane::OnSaveConfig);
   connect(m_pal60_mode_checkbox, &QCheckBox::toggled, this, &WiiPane::OnSaveConfig);
   connect(m_sd_card_checkbox, &QCheckBox::toggled, this, &WiiPane::OnSaveConfig);
+  connect(m_allow_sd_writes_checkbox, &QCheckBox::toggled, this, &WiiPane::OnSaveConfig);
   connect(m_connect_keyboard_checkbox, &QCheckBox::toggled, this, &WiiPane::OnSaveConfig);
   connect(&Settings::Instance(), &Settings::SDCardInsertionChanged, m_sd_card_checkbox,
           &QCheckBox::setChecked);
@@ -86,12 +87,15 @@ void WiiPane::ConnectLayout()
           &WiiPane::OnUSBWhitelistRemoveButton);
 
   // Wii Remote Settings
-  connect(m_wiimote_ir_sensor_position,
-          static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
+  connect(m_wiimote_ir_sensor_position, qOverload<int>(&QComboBox::currentIndexChanged), this,
           &WiiPane::OnSaveConfig);
   connect(m_wiimote_ir_sensitivity, &QSlider::valueChanged, this, &WiiPane::OnSaveConfig);
   connect(m_wiimote_speaker_volume, &QSlider::valueChanged, this, &WiiPane::OnSaveConfig);
   connect(m_wiimote_motor, &QCheckBox::toggled, this, &WiiPane::OnSaveConfig);
+
+  // Emulation State
+  connect(&Settings::Instance(), &Settings::EmulationStateChanged,
+          [=](Core::State state) { OnEmulationStateChanged(state != Core::State::Uninitialized); });
 }
 
 void WiiPane::CreateMisc()
@@ -103,6 +107,7 @@ void WiiPane::CreateMisc()
   m_pal60_mode_checkbox = new QCheckBox(tr("Use PAL60 Mode (EuRGB60)"));
   m_screensaver_checkbox = new QCheckBox(tr("Enable Screen Saver"));
   m_sd_card_checkbox = new QCheckBox(tr("Insert SD Card"));
+  m_allow_sd_writes_checkbox = new QCheckBox(tr("Allow Writes to SD Card"));
   m_connect_keyboard_checkbox = new QCheckBox(tr("Connect USB Keyboard"));
   m_aspect_ratio_choice_label = new QLabel(tr("Aspect Ratio:"));
   m_aspect_ratio_choice = new QComboBox();
@@ -125,17 +130,18 @@ void WiiPane::CreateMisc()
                                        "(576i) for PAL games.\nMay not work for all games."));
   m_screensaver_checkbox->setToolTip(tr("Dims the screen after five minutes of inactivity."));
   m_system_language_choice->setToolTip(tr("Sets the Wii system language."));
-  m_sd_card_checkbox->setToolTip(tr("Saved to /Wii/sd.raw (default size is 128mb)."));
+  m_sd_card_checkbox->setToolTip(tr("Supports SD and SDHC. Default size is 128 MB."));
   m_connect_keyboard_checkbox->setToolTip(tr("May cause slow down in Wii Menu and some games."));
 
   misc_settings_group_layout->addWidget(m_pal60_mode_checkbox, 0, 0, 1, 1);
   misc_settings_group_layout->addWidget(m_sd_card_checkbox, 0, 1, 1, 1);
   misc_settings_group_layout->addWidget(m_screensaver_checkbox, 1, 0, 1, 1);
-  misc_settings_group_layout->addWidget(m_connect_keyboard_checkbox, 1, 1, 1, 1);
-  misc_settings_group_layout->addWidget(m_aspect_ratio_choice_label, 2, 0, 1, 1);
-  misc_settings_group_layout->addWidget(m_aspect_ratio_choice, 2, 1, 1, 1);
-  misc_settings_group_layout->addWidget(m_system_language_choice_label, 3, 0, 1, 1);
-  misc_settings_group_layout->addWidget(m_system_language_choice, 3, 1, 1, 1);
+  misc_settings_group_layout->addWidget(m_allow_sd_writes_checkbox, 1, 1, 1, 1);
+  misc_settings_group_layout->addWidget(m_connect_keyboard_checkbox, 2, 1, 1, 1);
+  misc_settings_group_layout->addWidget(m_aspect_ratio_choice_label, 3, 0, 1, 1);
+  misc_settings_group_layout->addWidget(m_aspect_ratio_choice, 3, 1, 1, 1);
+  misc_settings_group_layout->addWidget(m_system_language_choice_label, 4, 0, 1, 1);
+  misc_settings_group_layout->addWidget(m_system_language_choice, 4, 1, 1, 1);
 }
 
 void WiiPane::CreateWhitelistedUSBPassthroughDevices()
@@ -172,8 +178,9 @@ void WiiPane::CreateWiiRemoteSettings()
   // i18n: IR stands for infrared and refers to the pointer functionality of Wii Remotes
   m_wiimote_ir_sensitivity_label = new QLabel(tr("IR Sensitivity:"));
   m_wiimote_ir_sensitivity = new QSlider(Qt::Horizontal);
-  m_wiimote_ir_sensitivity->setMinimum(4);
-  m_wiimote_ir_sensitivity->setMaximum(127);
+  // Wii menu saves values from 1 to 5.
+  m_wiimote_ir_sensitivity->setMinimum(1);
+  m_wiimote_ir_sensitivity->setMaximum(5);
 
   // Speaker Volume Slider
   m_wiimote_speaker_volume_label = new QLabel(tr("Speaker Volume:"));
@@ -207,6 +214,7 @@ void WiiPane::LoadConfig()
   m_screensaver_checkbox->setChecked(Config::Get(Config::SYSCONF_SCREENSAVER));
   m_pal60_mode_checkbox->setChecked(Config::Get(Config::SYSCONF_PAL60));
   m_sd_card_checkbox->setChecked(Settings::Instance().IsSDCardInserted());
+  m_allow_sd_writes_checkbox->setChecked(Config::Get(Config::MAIN_ALLOW_SD_WRITES));
   m_connect_keyboard_checkbox->setChecked(Settings::Instance().IsUSBKeyboardConnected());
   m_aspect_ratio_choice->setCurrentIndex(Config::Get(Config::SYSCONF_WIDESCREEN));
   m_system_language_choice->setCurrentIndex(Config::Get(Config::SYSCONF_LANGUAGE));
@@ -227,6 +235,7 @@ void WiiPane::OnSaveConfig()
   Config::SetBase(Config::SYSCONF_SCREENSAVER, m_screensaver_checkbox->isChecked());
   Config::SetBase(Config::SYSCONF_PAL60, m_pal60_mode_checkbox->isChecked());
   Settings::Instance().SetSDCardInserted(m_sd_card_checkbox->isChecked());
+  Config::SetBase(Config::MAIN_ALLOW_SD_WRITES, m_allow_sd_writes_checkbox->isChecked());
   Settings::Instance().SetUSBKeyboardConnected(m_connect_keyboard_checkbox->isChecked());
 
   Config::SetBase<u32>(Config::SYSCONF_SENSOR_BAR_POSITION,

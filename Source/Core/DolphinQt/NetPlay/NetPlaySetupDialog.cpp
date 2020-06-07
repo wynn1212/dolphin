@@ -199,22 +199,21 @@ void NetPlaySetupDialog::CreateMainLayout()
 
 void NetPlaySetupDialog::ConnectWidgets()
 {
-  connect(m_connection_type, static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
-          this, &NetPlaySetupDialog::OnConnectionTypeChanged);
+  connect(m_connection_type, qOverload<int>(&QComboBox::currentIndexChanged), this,
+          &NetPlaySetupDialog::OnConnectionTypeChanged);
   connect(m_nickname_edit, &QLineEdit::textChanged, this, &NetPlaySetupDialog::SaveSettings);
 
   // Connect widget
   connect(m_ip_edit, &QLineEdit::textChanged, this, &NetPlaySetupDialog::SaveSettings);
-  connect(m_connect_port_box, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this,
+  connect(m_connect_port_box, qOverload<int>(&QSpinBox::valueChanged), this,
           &NetPlaySetupDialog::SaveSettings);
   // Host widget
-  connect(m_host_port_box, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this,
+  connect(m_host_port_box, qOverload<int>(&QSpinBox::valueChanged), this,
           &NetPlaySetupDialog::SaveSettings);
-  connect(m_host_games, static_cast<void (QListWidget::*)(int)>(&QListWidget::currentRowChanged),
-          [this](int index) {
-            Settings::GetQSettings().setValue(QStringLiteral("netplay/hostgame"),
-                                              m_host_games->item(index)->text());
-          });
+  connect(m_host_games, qOverload<int>(&QListWidget::currentRowChanged), [this](int index) {
+    Settings::GetQSettings().setValue(QStringLiteral("netplay/hostgame"),
+                                      m_host_games->item(index)->text());
+  });
 
   connect(m_host_games, &QListWidget::itemDoubleClicked, this, &NetPlaySetupDialog::accept);
 
@@ -224,9 +223,16 @@ void NetPlaySetupDialog::ConnectWidgets()
     m_host_chunked_upload_limit_box->setEnabled(value);
     SaveSettings();
   });
-  connect(m_host_chunked_upload_limit_box,
-          static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this,
+  connect(m_host_chunked_upload_limit_box, qOverload<int>(&QSpinBox::valueChanged), this,
           &NetPlaySetupDialog::SaveSettings);
+
+  connect(m_host_server_browser, &QCheckBox::toggled, this, &NetPlaySetupDialog::SaveSettings);
+  connect(m_host_server_name, &QLineEdit::textChanged, this, &NetPlaySetupDialog::SaveSettings);
+  connect(m_host_server_password, &QLineEdit::textChanged, this, &NetPlaySetupDialog::SaveSettings);
+  connect(m_host_server_region,
+          static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
+          &NetPlaySetupDialog::SaveSettings);
+
 #ifdef USE_UPNP
   connect(m_host_upnp, &QCheckBox::stateChanged, this, &NetPlaySetupDialog::SaveSettings);
 #endif
@@ -325,6 +331,14 @@ void NetPlaySetupDialog::accept()
     if (m_host_server_browser->isChecked() && m_host_server_name->text().isEmpty())
     {
       ModalMessageBox::critical(this, tr("Error"), tr("You must provide a name for your session!"));
+      return;
+    }
+
+    if (m_host_server_browser->isChecked() &&
+        m_host_server_region->currentData().toString().isEmpty())
+    {
+      ModalMessageBox::critical(this, tr("Error"),
+                                tr("You must provide a region for your session!"));
       return;
     }
 
