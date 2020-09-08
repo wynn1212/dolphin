@@ -13,9 +13,10 @@
 #include <imgui.h>
 
 #include "Common/CommonTypes.h"
+#include "Common/Config/Config.h"
 #include "Common/Timer.h"
 
-#include "Core/ConfigManager.h"
+#include "Core/Config/MainSettings.h"
 
 namespace OSD
 {
@@ -37,12 +38,12 @@ struct Message
 static std::multimap<MessageType, Message> s_messages;
 static std::mutex s_messages_mutex;
 
-static ImVec4 RGBAToImVec4(const u32 rgba)
+static ImVec4 ARGBToImVec4(const u32 argb)
 {
-  return ImVec4(static_cast<float>((rgba >> 16) & 0xFF) / 255.0f,
-                static_cast<float>((rgba >> 8) & 0xFF) / 255.0f,
-                static_cast<float>((rgba >> 0) & 0xFF) / 255.0f,
-                static_cast<float>((rgba >> 24) & 0xFF) / 255.0f);
+  return ImVec4(static_cast<float>((argb >> 16) & 0xFF) / 255.0f,
+                static_cast<float>((argb >> 8) & 0xFF) / 255.0f,
+                static_cast<float>((argb >> 0) & 0xFF) / 255.0f,
+                static_cast<float>((argb >> 24) & 0xFF) / 255.0f);
 }
 
 static float DrawMessage(int index, const Message& msg, const ImVec2& position, int time_left)
@@ -67,7 +68,7 @@ static float DrawMessage(int index, const Message& msg, const ImVec2& position, 
                        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing))
   {
     // Use %s in case message contains %.
-    ImGui::TextColored(RGBAToImVec4(msg.color), "%s", msg.text.c_str());
+    ImGui::TextColored(ARGBToImVec4(msg.color), "%s", msg.text.c_str());
     window_height =
         ImGui::GetWindowSize().y + (WINDOW_PADDING * ImGui::GetIO().DisplayFramebufferScale.y);
   }
@@ -78,23 +79,23 @@ static float DrawMessage(int index, const Message& msg, const ImVec2& position, 
   return window_height;
 }
 
-void AddTypedMessage(MessageType type, std::string message, u32 ms, u32 rgba)
+void AddTypedMessage(MessageType type, std::string message, u32 ms, u32 argb)
 {
   std::lock_guard lock{s_messages_mutex};
   s_messages.erase(type);
-  s_messages.emplace(type, Message(std::move(message), Common::Timer::GetTimeMs() + ms, rgba));
+  s_messages.emplace(type, Message(std::move(message), Common::Timer::GetTimeMs() + ms, argb));
 }
 
-void AddMessage(std::string message, u32 ms, u32 rgba)
+void AddMessage(std::string message, u32 ms, u32 argb)
 {
   std::lock_guard lock{s_messages_mutex};
   s_messages.emplace(MessageType::Typeless,
-                     Message(std::move(message), Common::Timer::GetTimeMs() + ms, rgba));
+                     Message(std::move(message), Common::Timer::GetTimeMs() + ms, argb));
 }
 
 void DrawMessages()
 {
-  const bool draw_messages = SConfig::GetInstance().bOnScreenDisplayMessages;
+  const bool draw_messages = Config::Get(Config::MAIN_OSD_MESSAGES);
   const u32 now = Common::Timer::GetTimeMs();
   const float current_x = LEFT_MARGIN * ImGui::GetIO().DisplayFramebufferScale.x;
   float current_y = TOP_MARGIN * ImGui::GetIO().DisplayFramebufferScale.y;

@@ -92,7 +92,6 @@ void SConfig::SaveSettings()
   SaveDSPSettings(ini);
   SaveInputSettings(ini);
   SaveFifoPlayerSettings(ini);
-  SaveAnalyticsSettings(ini);
   SaveBluetoothPassthroughSettings(ini);
   SaveUSBPassthroughSettings(ini);
   SaveAutoUpdateSettings(ini);
@@ -127,7 +126,6 @@ void SConfig::SaveGeneralSettings(IniFile& ini)
     general->Set(fmt::format("ISOPath{}", i), m_ISOFolder[i]);
   }
 
-  general->Set("RecursiveISOPaths", m_RecursiveISOFolder);
   general->Set("WirelessMac", m_WirelessMac);
 
 #ifdef USE_GDBSTUB
@@ -143,8 +141,6 @@ void SConfig::SaveInterfaceSettings(IniFile& ini)
   IniFile::Section* interface = ini.GetOrCreateSection("Interface");
 
   interface->Set("ConfirmStop", bConfirmStop);
-  interface->Set("UsePanicHandlers", bUsePanicHandlers);
-  interface->Set("OnScreenDisplayMessages", bOnScreenDisplayMessages);
   interface->Set("HideCursor", bHideCursor);
   interface->Set("LanguageCode", m_InterfaceLanguage);
   interface->Set("ExtendedFPSInfo", m_InterfaceExtendedFPSInfo);
@@ -191,6 +187,9 @@ void SConfig::SaveGameListSettings(IniFile& ini)
   gamelist->Set("ColumnID", m_showIDColumn);
   gamelist->Set("ColumnRegion", m_showRegionColumn);
   gamelist->Set("ColumnSize", m_showSizeColumn);
+  gamelist->Set("ColumnFileFormat", m_showFileFormatColumn);
+  gamelist->Set("ColumnBlockSize", m_showBlockSizeColumn);
+  gamelist->Set("ColumnCompression", m_showCompressionColumn);
   gamelist->Set("ColumnTags", m_showTagsColumn);
 }
 
@@ -224,6 +223,8 @@ void SConfig::SaveCoreSettings(IniFile& ini)
   core->Set("SlotB", m_EXIDevice[1]);
   core->Set("SerialPort1", m_EXIDevice[2]);
   core->Set("BBA_MAC", m_bba_mac);
+  core->Set("BBA_XLINK_IP", m_bba_xlink_ip);
+  core->Set("BBA_XLINK_CHAT_OSD", m_bba_xlink_chat_osd);
   for (int i = 0; i < SerialInterface::MAX_SI_CHANNELS; ++i)
   {
     core->Set(fmt::format("SIDevice{}", i), m_SIDevice[i]);
@@ -290,15 +291,6 @@ void SConfig::SaveFifoPlayerSettings(IniFile& ini)
   fifoplayer->Set("LoopReplay", bLoopFifoReplay);
 }
 
-void SConfig::SaveAnalyticsSettings(IniFile& ini)
-{
-  IniFile::Section* analytics = ini.GetOrCreateSection("Analytics");
-
-  analytics->Set("ID", m_analytics_id);
-  analytics->Set("Enabled", m_analytics_enabled);
-  analytics->Set("PermissionAsked", m_analytics_permission_asked);
-}
-
 void SConfig::SaveBluetoothPassthroughSettings(IniFile& ini)
 {
   IniFile::Section* section = ini.GetOrCreateSection("BluetoothPassthrough");
@@ -363,7 +355,6 @@ void SConfig::LoadSettings()
   LoadDSPSettings(ini);
   LoadInputSettings(ini);
   LoadFifoPlayerSettings(ini);
-  LoadAnalyticsSettings(ini);
   LoadBluetoothPassthroughSettings(ini);
   LoadUSBPassthroughSettings(ini);
   LoadAutoUpdateSettings(ini);
@@ -396,7 +387,6 @@ void SConfig::LoadGeneralSettings(IniFile& ini)
     }
   }
 
-  general->Get("RecursiveISOPaths", &m_RecursiveISOFolder, false);
   general->Get("WirelessMac", &m_WirelessMac);
 }
 
@@ -405,8 +395,6 @@ void SConfig::LoadInterfaceSettings(IniFile& ini)
   IniFile::Section* interface = ini.GetOrCreateSection("Interface");
 
   interface->Get("ConfirmStop", &bConfirmStop, true);
-  interface->Get("UsePanicHandlers", &bUsePanicHandlers, true);
-  interface->Get("OnScreenDisplayMessages", &bOnScreenDisplayMessages, true);
   interface->Get("HideCursor", &bHideCursor, false);
   interface->Get("LanguageCode", &m_InterfaceLanguage, "");
   interface->Get("ExtendedFPSInfo", &m_InterfaceExtendedFPSInfo, false);
@@ -455,6 +443,9 @@ void SConfig::LoadGameListSettings(IniFile& ini)
   gamelist->Get("ColumnID", &m_showIDColumn, false);
   gamelist->Get("ColumnRegion", &m_showRegionColumn, true);
   gamelist->Get("ColumnSize", &m_showSizeColumn, true);
+  gamelist->Get("ColumnFileFormat", &m_showFileFormatColumn, false);
+  gamelist->Get("ColumnBlockSize", &m_showBlockSizeColumn, false);
+  gamelist->Get("ColumnCompression", &m_showCompressionColumn, false);
   gamelist->Get("ColumnTags", &m_showTagsColumn, false);
 }
 
@@ -489,6 +480,8 @@ void SConfig::LoadCoreSettings(IniFile& ini)
   core->Get("SlotB", (int*)&m_EXIDevice[1], ExpansionInterface::EXIDEVICE_NONE);
   core->Get("SerialPort1", (int*)&m_EXIDevice[2], ExpansionInterface::EXIDEVICE_NONE);
   core->Get("BBA_MAC", &m_bba_mac);
+  core->Get("BBA_XLINK_IP", &m_bba_xlink_ip, "127.0.0.1");
+  core->Get("BBA_XLINK_CHAT_OSD", &m_bba_xlink_chat_osd, true);
   for (size_t i = 0; i < std::size(m_SIDevice); ++i)
   {
     core->Get(fmt::format("SIDevice{}", i), &m_SIDevice[i],
@@ -566,15 +559,6 @@ void SConfig::LoadFifoPlayerSettings(IniFile& ini)
   IniFile::Section* fifoplayer = ini.GetOrCreateSection("FifoPlayer");
 
   fifoplayer->Get("LoopReplay", &bLoopFifoReplay, true);
-}
-
-void SConfig::LoadAnalyticsSettings(IniFile& ini)
-{
-  IniFile::Section* analytics = ini.GetOrCreateSection("Analytics");
-
-  analytics->Get("ID", &m_analytics_id, "");
-  analytics->Get("Enabled", &m_analytics_enabled, false);
-  analytics->Get("PermissionAsked", &m_analytics_permission_asked, false);
 }
 
 void SConfig::LoadBluetoothPassthroughSettings(IniFile& ini)
@@ -761,12 +745,6 @@ void SConfig::LoadDefaults()
   iLatency = 20;
   m_audio_stretch = false;
   m_audio_stretch_max_latency = 80;
-  bUsePanicHandlers = true;
-  bOnScreenDisplayMessages = true;
-
-  m_analytics_id = "";
-  m_analytics_enabled = false;
-  m_analytics_permission_asked = false;
 
   bLoopFifoReplay = true;
 

@@ -1,23 +1,29 @@
 package org.dolphinemu.dolphinemu.features.settings.model;
 
+import android.content.Context;
 import android.text.TextUtils;
 
 import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.features.settings.ui.SettingsActivityView;
 import org.dolphinemu.dolphinemu.features.settings.utils.SettingsFile;
+import org.dolphinemu.dolphinemu.services.GameFileCacheService;
+import org.dolphinemu.dolphinemu.utils.IniFile;
 
-import java.util.Arrays;
+import java.io.File;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
+import java.util.Set;
 
 public class Settings
 {
+  public static final String SECTION_INI_ANDROID = "Android";
   public static final String SECTION_INI_GENERAL = "General";
   public static final String SECTION_INI_CORE = "Core";
   public static final String SECTION_INI_INTERFACE = "Interface";
   public static final String SECTION_INI_DSP = "DSP";
+
+  public static final String SECTION_LOGGER_LOGS = "Logs";
+  public static final String SECTION_LOGGER_OPTIONS = "Options";
 
   public static final String SECTION_GFX_SETTINGS = "Settings";
   public static final String SECTION_GFX_ENHANCEMENTS = "Enhancements";
@@ -33,76 +39,51 @@ public class Settings
   public static final String SECTION_CONTROLS = "Controls";
   public static final String SECTION_PROFILE = "Profile";
 
-  private static final String DSP_HLE = "0";
-  private static final String DSP_LLE_RECOMPILER = "1";
-  private static final String DSP_LLE_INTERPRETER = "2";
+  private static final int DSP_HLE = 0;
+  private static final int DSP_LLE_RECOMPILER = 1;
+  private static final int DSP_LLE_INTERPRETER = 2;
 
   public static final String SECTION_ANALYTICS = "Analytics";
 
+  public static final String GAME_SETTINGS_PLACEHOLDER_FILE_NAME = "";
+
   private String gameId;
 
-  private static final Map<String, List<String>> configFileSectionsMap = new HashMap<>();
+  private static final String[] configFiles = new String[]{SettingsFile.FILE_NAME_DOLPHIN,
+          SettingsFile.FILE_NAME_GFX, SettingsFile.FILE_NAME_LOGGER,
+          SettingsFile.FILE_NAME_WIIMOTE};
 
-  static
+  private HashMap<String, IniFile> mIniFiles = new HashMap<>();
+
+  private IniFile getGameSpecificFile()
   {
-    configFileSectionsMap.put(SettingsFile.FILE_NAME_DOLPHIN,
-            Arrays.asList(SECTION_INI_GENERAL, SECTION_INI_CORE, SECTION_INI_INTERFACE,
-                    SECTION_INI_DSP,
-                    SECTION_BINDINGS, SECTION_ANALYTICS, SECTION_DEBUG));
-    configFileSectionsMap.put(SettingsFile.FILE_NAME_GFX,
-            Arrays.asList(SECTION_GFX_SETTINGS, SECTION_GFX_ENHANCEMENTS, SECTION_GFX_HACKS,
-                    SECTION_STEREOSCOPY));
-    configFileSectionsMap.put(SettingsFile.FILE_NAME_WIIMOTE,
-            Arrays.asList(SECTION_WIIMOTE + 1, SECTION_WIIMOTE + 2, SECTION_WIIMOTE + 3,
-                    SECTION_WIIMOTE + 4));
+    if (TextUtils.isEmpty(gameId) || mIniFiles.size() != 1)
+      throw new IllegalStateException();
+
+    return mIniFiles.get(GAME_SETTINGS_PLACEHOLDER_FILE_NAME);
   }
 
-  /**
-   * A HashMap<String, SettingSection> that constructs a new SettingSection instead of returning null
-   * when getting a key not already in the map
-   */
-  public static final class SettingsSectionMap extends HashMap<String, SettingSection>
+  public IniFile.Section getSection(String fileName, String sectionName)
   {
-    @Override
-    public SettingSection get(Object key)
+    if (TextUtils.isEmpty(gameId))
     {
-      if (!(key instanceof String))
-      {
-        return null;
-      }
-
-      String stringKey = (String) key;
-
-      if (!super.containsKey(stringKey))
-      {
-        SettingSection section = new SettingSection(stringKey);
-        super.put(stringKey, section);
-        return section;
-      }
-      return super.get(key);
+      return mIniFiles.get(fileName).getOrCreateSection(sectionName);
     }
-  }
-
-  private HashMap<String, SettingSection> sections = new Settings.SettingsSectionMap();
-
-  public SettingSection getSection(String sectionName)
-  {
-    return sections.get(sectionName);
+    else
+    {
+      return getGameSpecificFile()
+              .getOrCreateSection(SettingsFile.mapSectionNameFromIni(sectionName));
+    }
   }
 
   public boolean isEmpty()
   {
-    return sections.isEmpty();
-  }
-
-  public HashMap<String, SettingSection> getSections()
-  {
-    return sections;
+    return mIniFiles.isEmpty();
   }
 
   public void loadSettings(SettingsActivityView view)
   {
-    sections = new Settings.SettingsSectionMap();
+    mIniFiles = new HashMap<>();
 
     if (TextUtils.isEmpty(gameId))
     {
@@ -116,46 +97,24 @@ public class Settings
 
   private void loadDolphinSettings(SettingsActivityView view)
   {
-    for (Map.Entry<String, List<String>> entry : configFileSectionsMap.entrySet())
+    for (String fileName : configFiles)
     {
-      String fileName = entry.getKey();
-      sections.putAll(SettingsFile.readFile(fileName, view));
+      IniFile ini = new IniFile();
+      SettingsFile.readFile(fileName, ini, view);
+      mIniFiles.put(fileName, ini);
     }
-  }
-
-  private void loadGenericGameSettings(String gameId, SettingsActivityView view)
-  {
-    // generic game settings
-    mergeSections(SettingsFile.readGenericGameSettings(gameId, view));
-    mergeSections(SettingsFile.readGenericGameSettingsForAllRegions(gameId, view));
   }
 
   private void loadCustomGameSettings(String gameId, SettingsActivityView view)
   {
-    // custom game settings
-    mergeSections(SettingsFile.readCustomGameSettings(gameId, view));
+    IniFile ini = new IniFile();
+    SettingsFile.readCustomGameSettings(gameId, ini, view);
+    mIniFiles.put(GAME_SETTINGS_PLACEHOLDER_FILE_NAME, ini);
   }
 
-  public void loadWiimoteProfile(String gameId, String padId)
+  public void loadWiimoteProfile(String gameId, int padId)
   {
-    mergeSections(SettingsFile.readWiimoteProfile(gameId, padId));
-  }
-
-  private void mergeSections(HashMap<String, SettingSection> updatedSections)
-  {
-    for (Map.Entry<String, SettingSection> entry : updatedSections.entrySet())
-    {
-      if (sections.containsKey(entry.getKey()))
-      {
-        SettingSection originalSection = sections.get(entry.getKey());
-        SettingSection updatedSection = entry.getValue();
-        originalSection.mergeSection(updatedSection);
-      }
-      else
-      {
-        sections.put(entry.getKey(), entry.getValue());
-      }
-    }
+    SettingsFile.readWiimoteProfile(gameId, getGameSpecificFile(), padId);
   }
 
   public void loadSettings(String gameId, SettingsActivityView view)
@@ -164,69 +123,72 @@ public class Settings
     loadSettings(view);
   }
 
-  public void saveSettings(SettingsActivityView view)
+  public void saveSettings(SettingsActivityView view, Context context, Set<String> modifiedSettings)
   {
     if (TextUtils.isEmpty(gameId))
     {
       view.showToastMessage("Saved settings to INI files");
 
-      for (Map.Entry<String, List<String>> entry : configFileSectionsMap.entrySet())
+      for (Map.Entry<String, IniFile> entry : mIniFiles.entrySet())
       {
-        String fileName = entry.getKey();
-        List<String> sectionNames = entry.getValue();
-        TreeMap<String, SettingSection> iniSections = new TreeMap<>();
-        for (String section : sectionNames)
-        {
-          iniSections.put(section, sections.get(section));
-        }
-
-        SettingsFile.saveFile(fileName, iniSections, view);
+        SettingsFile.saveFile(entry.getKey(), entry.getValue(), view);
       }
 
-      switch (NativeLibrary
-              .GetConfig(SettingsFile.FILE_NAME_DOLPHIN + ".ini", Settings.SECTION_INI_DSP,
-                      SettingsFile.KEY_DSP_ENGINE, DSP_HLE))
+      if (modifiedSettings.contains(SettingsFile.KEY_DSP_ENGINE))
       {
-        case DSP_HLE:
-          NativeLibrary
-                  .SetConfig(SettingsFile.FILE_NAME_DOLPHIN + ".ini", Settings.SECTION_INI_CORE,
-                          SettingsFile.KEY_DSP_HLE, "True");
-          NativeLibrary.SetConfig(SettingsFile.FILE_NAME_DOLPHIN + ".ini", Settings.SECTION_INI_DSP,
-                  SettingsFile.KEY_DSP_ENABLE_JIT, "True");
-          break;
+        File dolphinFile = SettingsFile.getSettingsFile(SettingsFile.FILE_NAME_DOLPHIN);
+        IniFile dolphinIni = new IniFile(dolphinFile);
 
-        case DSP_LLE_RECOMPILER:
-          NativeLibrary
-                  .SetConfig(SettingsFile.FILE_NAME_DOLPHIN + ".ini", Settings.SECTION_INI_CORE,
-                          SettingsFile.KEY_DSP_HLE, "False");
-          NativeLibrary.SetConfig(SettingsFile.FILE_NAME_DOLPHIN + ".ini", Settings.SECTION_INI_DSP,
-                  SettingsFile.KEY_DSP_ENABLE_JIT, "True");
-          break;
+        switch (dolphinIni.getInt(Settings.SECTION_INI_ANDROID, SettingsFile.KEY_DSP_ENGINE,
+                DSP_HLE))
+        {
+          case DSP_HLE:
+            dolphinIni.setBoolean(Settings.SECTION_INI_CORE, SettingsFile.KEY_DSP_HLE, true);
+            dolphinIni.setBoolean(Settings.SECTION_INI_DSP, SettingsFile.KEY_DSP_ENABLE_JIT, true);
+            break;
 
-        case DSP_LLE_INTERPRETER:
-          NativeLibrary
-                  .SetConfig(SettingsFile.FILE_NAME_DOLPHIN + ".ini", Settings.SECTION_INI_CORE,
-                          SettingsFile.KEY_DSP_HLE, "False");
-          NativeLibrary.SetConfig(SettingsFile.FILE_NAME_DOLPHIN + ".ini", Settings.SECTION_INI_DSP,
-                  SettingsFile.KEY_DSP_ENABLE_JIT, "False");
-          break;
+          case DSP_LLE_RECOMPILER:
+            dolphinIni.setBoolean(Settings.SECTION_INI_CORE, SettingsFile.KEY_DSP_HLE, false);
+            dolphinIni.setBoolean(Settings.SECTION_INI_DSP, SettingsFile.KEY_DSP_ENABLE_JIT, true);
+            break;
+
+          case DSP_LLE_INTERPRETER:
+            dolphinIni.setBoolean(Settings.SECTION_INI_CORE, SettingsFile.KEY_DSP_HLE, false);
+            dolphinIni.setBoolean(Settings.SECTION_INI_DSP, SettingsFile.KEY_DSP_ENABLE_JIT, false);
+            break;
+        }
+
+        dolphinIni.save(dolphinFile);
       }
 
       // Notify the native code of the changes
       NativeLibrary.ReloadConfig();
       NativeLibrary.ReloadWiimoteConfig();
+      NativeLibrary.ReloadLoggerConfig();
+      NativeLibrary.UpdateGCAdapterScanThread();
+
+      if (modifiedSettings.contains(SettingsFile.KEY_RECURSIVE_ISO_PATHS))
+      {
+        // Refresh game library
+        GameFileCacheService.startRescan(context);
+      }
+
+      modifiedSettings.clear();
     }
     else
     {
       // custom game settings
       view.showToastMessage("Saved settings for " + gameId);
-      SettingsFile.saveCustomGameSettings(gameId, sections);
+      SettingsFile.saveCustomGameSettings(gameId, getGameSpecificFile());
     }
   }
 
   public void clearSettings()
   {
-    sections.clear();
+    for (String fileName : mIniFiles.keySet())
+    {
+      mIniFiles.put(fileName, new IniFile());
+    }
   }
 
   public boolean gameIniContainsJunk()
@@ -252,7 +214,6 @@ public class Settings
     if (TextUtils.isEmpty(gameId))
       return false;
 
-    SettingSection interfaceSection = sections.get("Interface");
-    return interfaceSection != null && interfaceSection.getSetting("ThemeName") != null;
+    return getSection(SettingsFile.FILE_NAME_DOLPHIN, SECTION_INI_INTERFACE).exists("ThemeName");
   }
 }

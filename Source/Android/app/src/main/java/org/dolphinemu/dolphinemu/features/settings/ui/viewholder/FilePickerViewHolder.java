@@ -3,12 +3,10 @@ package org.dolphinemu.dolphinemu.features.settings.ui.viewholder;
 import android.view.View;
 import android.widget.TextView;
 
-import org.dolphinemu.dolphinemu.NativeLibrary;
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.features.settings.model.view.FilePicker;
 import org.dolphinemu.dolphinemu.features.settings.model.view.SettingsItem;
 import org.dolphinemu.dolphinemu.features.settings.ui.SettingsAdapter;
-import org.dolphinemu.dolphinemu.features.settings.utils.SettingsFile;
 import org.dolphinemu.dolphinemu.ui.main.MainPresenter;
 
 public final class FilePickerViewHolder extends SettingViewHolder
@@ -27,8 +25,8 @@ public final class FilePickerViewHolder extends SettingViewHolder
   @Override
   protected void findViews(View root)
   {
-    mTextSettingName = (TextView) root.findViewById(R.id.text_setting_name);
-    mTextSettingDescription = (TextView) root.findViewById(R.id.text_setting_description);
+    mTextSettingName = root.findViewById(R.id.text_setting_name);
+    mTextSettingDescription = root.findViewById(R.id.text_setting_description);
   }
 
   @Override
@@ -45,9 +43,7 @@ public final class FilePickerViewHolder extends SettingViewHolder
     }
     else
     {
-      mTextSettingDescription.setText(NativeLibrary
-              .GetConfig(mFilePicker.getFile(), item.getSection(), item.getKey(),
-                      mFilePicker.getSelectedValue()));
+      mTextSettingDescription.setText(mFilePicker.getSelectedValue(getAdapter().getSettings()));
     }
   }
 

@@ -16,7 +16,7 @@
 #include "Common/FileUtil.h"
 
 #include "Core/Config/MainSettings.h"
-#include "Core/ConfigManager.h"
+#include "Core/Config/UISettings.h"
 
 #include "DolphinQt/Settings.h"
 #include "DolphinQt/Settings/PathPane.h"
@@ -42,10 +42,10 @@ void PathPane::Browse()
 
 void PathPane::BrowseDefaultGame()
 {
-  QString file = QDir::toNativeSeparators(QFileDialog::getOpenFileName(
-      this, tr("Select a Game"), Settings::Instance().GetDefaultGame(),
-      tr("All GC/Wii files (*.elf *.dol *.gcm *.iso *.tgc *.wbfs *.ciso *.gcz *.wad *.m3u);;"
-         "All Files (*)")));
+  QString file = QDir::toNativeSeparators(
+      QFileDialog::getOpenFileName(this, tr("Select a Game"), Settings::Instance().GetDefaultGame(),
+                                   tr("All GC/Wii files (*.elf *.dol *.gcm *.iso *.tgc *.wbfs "
+                                      "*.ciso *.gcz *.wia *.rvz *.wad *.m3u);;All Files (*)")));
 
   if (!file.isEmpty())
     Settings::Instance().SetDefaultGame(file);
@@ -148,7 +148,7 @@ QGroupBox* PathPane::MakeGameFolderBox()
   m_remove_path->setEnabled(false);
 
   auto* recursive_checkbox = new QCheckBox(tr("Search Subfolders"));
-  recursive_checkbox->setChecked(SConfig::GetInstance().m_RecursiveISOFolder);
+  recursive_checkbox->setChecked(Config::Get(Config::MAIN_RECURSIVE_ISO_PATHS));
 
   auto* auto_checkbox = new QCheckBox(tr("Check for Game List Changes in the Background"));
   auto_checkbox->setChecked(Settings::Instance().IsAutoRefreshEnabled());
@@ -160,7 +160,7 @@ QGroupBox* PathPane::MakeGameFolderBox()
   vlayout->addWidget(auto_checkbox);
 
   connect(recursive_checkbox, &QCheckBox::toggled, [](bool checked) {
-    SConfig::GetInstance().m_RecursiveISOFolder = checked;
+    Config::SetBase(Config::MAIN_RECURSIVE_ISO_PATHS, checked);
     Settings::Instance().RefreshGameList();
   });
 

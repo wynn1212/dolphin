@@ -25,6 +25,8 @@
 
 namespace DiscIO
 {
+enum class WIARVZCompressionType : u32;
+
 // Increment CACHE_REVISION (GameFileCache.cpp) if the enum below is modified
 enum class BlobType
 {
@@ -34,8 +36,12 @@ enum class BlobType
   GCZ,
   CISO,
   WBFS,
-  TGC
+  TGC,
+  WIA,
+  RVZ,
 };
+
+std::string GetName(BlobType blob_type, bool translate);
 
 class BlobReader
 {
@@ -49,7 +55,9 @@ public:
   virtual bool IsDataSizeAccurate() const = 0;
 
   // Returns 0 if the format does not use blocks
-  virtual u64 GetBlockSize() const { return 0; }
+  virtual u64 GetBlockSize() const = 0;
+  virtual bool HasFastRandomAccessInBlock() const = 0;
+  virtual std::string GetCompressionMethod() const = 0;
 
   // NOT thread-safe - can't call this from multiple threads.
   virtual bool Read(u64 offset, u64 size, u8* out_ptr) = 0;
@@ -62,7 +70,11 @@ public:
     return Common::FromBigEndian(temp);
   }
 
-  virtual bool SupportsReadWiiDecrypted() const { return false; }
+  virtual bool SupportsReadWiiDecrypted(u64 offset, u64 size, u64 partition_data_offset) const
+  {
+    return false;
+  }
+
   virtual bool ReadWiiDecrypted(u64 offset, u64 size, u8* out_ptr, u64 partition_data_offset)
   {
     return false;
@@ -171,5 +183,9 @@ bool ConvertToGCZ(BlobReader* infile, const std::string& infile_path,
 bool ConvertToPlain(BlobReader* infile, const std::string& infile_path,
                     const std::string& outfile_path, CompressCB callback = nullptr,
                     void* arg = nullptr);
+bool ConvertToWIAOrRVZ(BlobReader* infile, const std::string& infile_path,
+                       const std::string& outfile_path, bool rvz,
+                       WIARVZCompressionType compression_type, int compression_level,
+                       int chunk_size, CompressCB callback = nullptr, void* arg = nullptr);
 
 }  // namespace DiscIO

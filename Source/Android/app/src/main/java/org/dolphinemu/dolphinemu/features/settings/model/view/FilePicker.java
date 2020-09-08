@@ -1,40 +1,28 @@
 package org.dolphinemu.dolphinemu.features.settings.model.view;
 
-import org.dolphinemu.dolphinemu.features.settings.model.Setting;
-import org.dolphinemu.dolphinemu.features.settings.model.StringSetting;
+import org.dolphinemu.dolphinemu.features.settings.model.Settings;
 
 public final class FilePicker extends SettingsItem
 {
-  private String mFile;
   private String mDefaultValue;
   private int mRequestType;
 
-  public FilePicker(String file, String key, String section, int titleId, int descriptionId,
-          String defaultVault, int requestType, Setting setting)
+  public FilePicker(String file, String section, String key, int titleId, int descriptionId,
+          String defaultVault, int requestType)
   {
-    super(key, section, setting, titleId, descriptionId);
-    mFile = file;
+    super(file, section, key, titleId, descriptionId);
     mDefaultValue = defaultVault;
     mRequestType = requestType;
   }
 
-  public String getFile()
+  public String getSelectedValue(Settings settings)
   {
-    return mFile + ".ini";
+    return settings.getSection(getFile(), getSection()).getString(getKey(), mDefaultValue);
   }
 
-  public String getSelectedValue()
+  public void setSelectedValue(Settings settings, String selection)
   {
-    StringSetting setting = (StringSetting) getSetting();
-
-    if (setting == null)
-    {
-      return mDefaultValue;
-    }
-    else
-    {
-      return setting.getValue();
-    }
+    settings.getSection(getFile(), getSection()).setString(getKey(), selection);
   }
 
   public int getRequestType()
