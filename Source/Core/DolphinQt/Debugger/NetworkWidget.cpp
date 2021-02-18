@@ -40,9 +40,9 @@ QTableWidgetItem* GetSocketDomain(s32 host_fd)
   switch (sa.sa_family)
   {
   case 2:
-    return new QTableWidgetItem(QLatin1Literal("AF_INET"));
+    return new QTableWidgetItem(QStringLiteral("AF_INET"));
   case 23:
-    return new QTableWidgetItem(QLatin1Literal("AF_INET6"));
+    return new QTableWidgetItem(QStringLiteral("AF_INET6"));
   default:
     return new QTableWidgetItem(QString::number(sa.sa_family));
   }
@@ -63,9 +63,9 @@ QTableWidgetItem* GetSocketType(s32 host_fd)
   switch (so_type)
   {
   case 1:
-    return new QTableWidgetItem(QLatin1Literal("SOCK_STREAM"));
+    return new QTableWidgetItem(QStringLiteral("SOCK_STREAM"));
   case 2:
-    return new QTableWidgetItem(QLatin1Literal("SOCK_DGRAM"));
+    return new QTableWidgetItem(QStringLiteral("SOCK_DGRAM"));
   default:
     return new QTableWidgetItem(QString::number(so_type));
   }
@@ -88,6 +88,15 @@ QTableWidgetItem* GetSocketState(s32 host_fd)
   if (ret == 0 && so_accept > 0)
     return new QTableWidgetItem(QTableWidget::tr("Listening"));
   return new QTableWidgetItem(QTableWidget::tr("Unbound"));
+}
+
+QTableWidgetItem* GetSocketBlocking(s32 wii_fd)
+{
+  const auto& socket_manager = IOS::HLE::WiiSockMan::GetInstance();
+  if (socket_manager.GetHostSocket(wii_fd) < 0)
+    return new QTableWidgetItem();
+  const bool is_blocking = socket_manager.IsSocketBlocking(wii_fd);
+  return new QTableWidgetItem(is_blocking ? QTableWidget::tr("Yes") : QTableWidget::tr("No"));
 }
 
 static QString GetAddressAndPort(const sockaddr_in& addr)
@@ -149,10 +158,10 @@ NetworkWidget::NetworkWidget(QWidget* parent) : QDockWidget(parent)
 
   connect(Host::GetInstance(), &Host::UpdateDisasmDialog, this, &NetworkWidget::Update);
 
-  connect(&Settings::Instance(), &Settings::NetworkVisibilityChanged,
+  connect(&Settings::Instance(), &Settings::NetworkVisibilityChanged, this,
           [this](bool visible) { setHidden(!visible); });
 
-  connect(&Settings::Instance(), &Settings::DebugModeToggled, [this](bool enabled) {
+  connect(&Settings::Instance(), &Settings::DebugModeToggled, this, [this](bool enabled) {
     setHidden(!enabled || !Settings::Instance().IsNetworkVisible());
   });
 }
@@ -206,6 +215,9 @@ void NetworkWidget::ConnectWidgets()
   connect(m_verify_certificates_checkbox, &QCheckBox::stateChanged, [](int state) {
     Config::SetBaseOrCurrent(Config::MAIN_NETWORK_SSL_VERIFY_CERTIFICATES, state == Qt::Checked);
   });
+  connect(m_dump_as_pcap_checkbox, &QCheckBox::stateChanged, [](int state) {
+    Config::SetBaseOrCurrent(Config::MAIN_NETWORK_DUMP_AS_PCAP, state == Qt::Checked);
+  });
 }
 
 void NetworkWidget::Update()
@@ -219,7 +231,8 @@ void NetworkWidget::Update()
     m_socket_table->setItem(wii_fd, 1, GetSocketDomain(host_fd));
     m_socket_table->setItem(wii_fd, 2, GetSocketType(host_fd));
     m_socket_table->setItem(wii_fd, 3, GetSocketState(host_fd));
-    m_socket_table->setItem(wii_fd, 4, GetSocketName(host_fd));
+    m_socket_table->setItem(wii_fd, 4, GetSocketBlocking(wii_fd));
+    m_socket_table->setItem(wii_fd, 5, GetSocketName(host_fd));
   }
   m_socket_table->resizeColumnsToContents();
 
@@ -228,11 +241,11 @@ void NetworkWidget::Update()
   {
     m_ssl_table->insertRow(ssl_id);
     s32 host_fd = -1;
-    if (IOS::HLE::Device::IsSSLIDValid(ssl_id) &&
-        IOS::HLE::Device::NetSSL::_SSL[ssl_id].ctx.p_bio != nullptr)
+    if (IOS::HLE::IsSSLIDValid(ssl_id))
     {
-      host_fd =
-          static_cast<mbedtls_net_context*>(IOS::HLE::Device::NetSSL::_SSL[ssl_id].ctx.p_bio)->fd;
+      const auto& ssl = IOS::HLE::NetSSLDevice::_SSL[ssl_id];
+      host_fd = ssl.hostfd;
+      m_ssl_table->setItem(ssl_id, 5, new QTableWidgetItem(QString::fromStdString(ssl.hostname)));
     }
     m_ssl_table->setItem(ssl_id, 0, new QTableWidgetItem(QString::number(ssl_id)));
     m_ssl_table->setItem(ssl_id, 1, GetSocketDomain(host_fd));
@@ -248,6 +261,7 @@ void NetworkWidget::Update()
   m_dump_peer_cert_checkbox->setChecked(Config::Get(Config::MAIN_NETWORK_SSL_DUMP_PEER_CERT));
   m_verify_certificates_checkbox->setChecked(
       Config::Get(Config::MAIN_NETWORK_SSL_VERIFY_CERTIFICATES));
+  m_dump_as_pcap_checkbox->setChecked(Config::Get(Config::MAIN_NETWORK_DUMP_AS_PCAP));
 }
 
 QGroupBox* NetworkWidget::CreateSocketTableGroup()
@@ -258,7 +272,7 @@ QGroupBox* NetworkWidget::CreateSocketTableGroup()
 
   m_socket_table = new QTableWidget();
   // i18n: FD stands for file descriptor (and in this case refers to sockets, not regular files)
-  QStringList header{tr("FD"), tr("Domain"), tr("Type"), tr("State"), tr("Name")};
+  QStringList header{tr("FD"), tr("Domain"), tr("Type"), tr("State"), tr("Blocking"), tr("Name")};
   m_socket_table->setColumnCount(header.size());
 
   m_socket_table->setHorizontalHeaderLabels(header);
@@ -280,7 +294,7 @@ QGroupBox* NetworkWidget::CreateSSLContextGroup()
   ssl_context_group->setLayout(ssl_context_layout);
 
   m_ssl_table = new QTableWidget();
-  QStringList header{tr("ID"), tr("Domain"), tr("Type"), tr("State"), tr("Name")};
+  QStringList header{tr("ID"), tr("Domain"), tr("Type"), tr("State"), tr("Name"), tr("Hostname")};
   m_ssl_table->setColumnCount(header.size());
 
   m_ssl_table->setHorizontalHeaderLabels(header);
@@ -307,12 +321,15 @@ QGroupBox* NetworkWidget::CreateSSLOptionsGroup()
   m_dump_root_ca_checkbox = new QCheckBox(tr("Dump root CA"));
   m_dump_peer_cert_checkbox = new QCheckBox(tr("Dump peer certificates"));
   m_verify_certificates_checkbox = new QCheckBox(tr("Verify certificates"));
+  // i18n: PCAP is a file format
+  m_dump_as_pcap_checkbox = new QCheckBox(tr("Dump as PCAP"));
 
   ssl_options_layout->addWidget(m_dump_ssl_read_checkbox, 0, 0);
   ssl_options_layout->addWidget(m_dump_ssl_write_checkbox, 1, 0);
   ssl_options_layout->addWidget(m_verify_certificates_checkbox, 2, 0);
   ssl_options_layout->addWidget(m_dump_root_ca_checkbox, 0, 1);
   ssl_options_layout->addWidget(m_dump_peer_cert_checkbox, 1, 1);
+  ssl_options_layout->addWidget(m_dump_as_pcap_checkbox, 2, 1);
 
   ssl_options_layout->setSpacing(1);
   return ssl_options_group;

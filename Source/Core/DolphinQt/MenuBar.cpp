@@ -7,6 +7,7 @@
 #include <cinttypes>
 
 #include <QAction>
+#include <QActionGroup>
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QFontDialog>
@@ -136,6 +137,7 @@ void MenuBar::OnEmulationStateChanged(Core::State state)
   m_jit_interpreter_core->setEnabled(running);
   m_jit_block_linking->setEnabled(!running);
   m_jit_disable_cache->setEnabled(!running);
+  m_jit_disable_fastmem->setEnabled(!running);
   m_jit_clear_cache->setEnabled(running);
   m_jit_log_coverage->setEnabled(!running);
   m_jit_search_instruction->setEnabled(running);
@@ -228,7 +230,7 @@ void MenuBar::AddToolsMenu()
   m_show_cheat_manager =
       tools_menu->addAction(tr("&Cheats Manager"), this, [this] { emit ShowCheatsManager(); });
 
-  connect(&Settings::Instance(), &Settings::EnableCheatsChanged, [this](bool enabled) {
+  connect(&Settings::Instance(), &Settings::EnableCheatsChanged, this, [this](bool enabled) {
     m_show_cheat_manager->setEnabled(Core::GetState() != Core::State::Uninitialized && enabled);
   });
 
@@ -266,7 +268,7 @@ void MenuBar::AddToolsMenu()
 
   m_boot_sysmenu->setEnabled(false);
 
-  connect(&Settings::Instance(), &Settings::NANDRefresh, [this] { UpdateToolsMenu(false); });
+  connect(&Settings::Instance(), &Settings::NANDRefresh, this, [this] { UpdateToolsMenu(false); });
 
   m_perform_online_update_menu = tools_menu->addMenu(tr("Perform Online System Update"));
   m_perform_online_update_for_current_region = m_perform_online_update_menu->addAction(
@@ -505,7 +507,13 @@ void MenuBar::AddViewMenu()
   AddShowRegionsMenu(view_menu);
 
   view_menu->addSeparator();
-  view_menu->addAction(tr("Purge Game List Cache"), this, &MenuBar::PurgeGameListCache);
+  QAction* const purge_action =
+      view_menu->addAction(tr("Purge Game List Cache"), this, &MenuBar::PurgeGameListCache);
+  purge_action->setEnabled(false);
+  connect(&Settings::Instance(), &Settings::GameListRefreshRequested, purge_action,
+          [purge_action] { purge_action->setEnabled(false); });
+  connect(&Settings::Instance(), &Settings::GameListRefreshStarted, purge_action,
+          [purge_action] { purge_action->setEnabled(true); });
   view_menu->addSeparator();
   view_menu->addAction(tr("Search"), this, &MenuBar::ShowSearch, QKeySequence::Find);
 }
@@ -521,6 +529,7 @@ void MenuBar::AddOptionsMenu()
   m_controllers_action =
       options_menu->addAction(tr("&Controller Settings"), this, &MenuBar::ConfigureControllers);
   options_menu->addAction(tr("&Hotkey Settings"), this, &MenuBar::ConfigureHotkeys);
+  options_menu->addAction(tr("&Free Look Settings"), this, &MenuBar::ConfigureFreelook);
 
   options_menu->addSeparator();
 
@@ -629,6 +638,9 @@ void MenuBar::AddListColumnsMenu(QMenu* view_menu)
       {tr("Game ID"), &SConfig::GetInstance().m_showIDColumn},
       {tr("Region"), &SConfig::GetInstance().m_showRegionColumn},
       {tr("File Size"), &SConfig::GetInstance().m_showSizeColumn},
+      {tr("File Format"), &SConfig::GetInstance().m_showFileFormatColumn},
+      {tr("Block Size"), &SConfig::GetInstance().m_showBlockSizeColumn},
+      {tr("Compression"), &SConfig::GetInstance().m_showCompressionColumn},
       {tr("Tags"), &SConfig::GetInstance().m_showTagsColumn}};
 
   QActionGroup* column_group = new QActionGroup(this);
@@ -691,20 +703,29 @@ void MenuBar::AddShowRegionsMenu(QMenu* view_menu)
       {tr("Show World"), &SConfig::GetInstance().m_ListWorld},
       {tr("Show Unknown"), &SConfig::GetInstance().m_ListUnknown}};
 
-  QActionGroup* region_group = new QActionGroup(this);
-  QMenu* region_menu = view_menu->addMenu(tr("Show Regions"));
-  region_group->setExclusive(false);
+  QMenu* const region_menu = view_menu->addMenu(tr("Show Regions"));
+  const QAction* const show_all_regions = region_menu->addAction(tr("Show All"));
+  const QAction* const hide_all_regions = region_menu->addAction(tr("Hide All"));
+  region_menu->addSeparator();
 
   for (const auto& key : region_map.keys())
   {
-    bool* config = region_map[key];
-    QAction* action = region_group->addAction(region_menu->addAction(key));
-    action->setCheckable(true);
-    action->setChecked(*config);
-    connect(action, &QAction::toggled, [this, config, key](bool value) {
-      *config = value;
-      emit GameListRegionVisibilityToggled(key, value);
-    });
+    bool* const config = region_map[key];
+    QAction* const menu_item = region_menu->addAction(key);
+    menu_item->setCheckable(true);
+    menu_item->setChecked(*config);
+
+    const auto set_visibility = [this, config, key, menu_item](bool visibility) {
+      menu_item->setChecked(visibility);
+      *config = visibility;
+      emit GameListRegionVisibilityToggled(key, visibility);
+    };
+    const auto set_visible = std::bind(set_visibility, true);
+    const auto set_hidden = std::bind(set_visibility, false);
+
+    connect(menu_item, &QAction::toggled, set_visibility);
+    connect(show_all_regions, &QAction::triggered, menu_item, set_visible);
+    connect(hide_all_regions, &QAction::triggered, menu_item, set_hidden);
   }
 }
 
@@ -807,6 +828,14 @@ void MenuBar::AddJITMenu()
   m_jit_disable_cache->setChecked(SConfig::GetInstance().bJITNoBlockCache);
   connect(m_jit_disable_cache, &QAction::toggled, [this](bool enabled) {
     SConfig::GetInstance().bJITNoBlockCache = enabled;
+    ClearCache();
+  });
+
+  m_jit_disable_fastmem = m_jit->addAction(tr("Disable Fastmem"));
+  m_jit_disable_fastmem->setCheckable(true);
+  m_jit_disable_fastmem->setChecked(!SConfig::GetInstance().bFastmem);
+  connect(m_jit_disable_fastmem, &QAction::toggled, [this](bool enabled) {
+    SConfig::GetInstance().bFastmem = !enabled;
     ClearCache();
   });
 
@@ -993,7 +1022,7 @@ void MenuBar::UpdateToolsMenu(bool emulation_started)
   }
 
   const auto ios = IOS::HLE::GetIOS();
-  const auto bt = ios ? std::static_pointer_cast<IOS::HLE::Device::BluetoothEmu>(
+  const auto bt = ios ? std::static_pointer_cast<IOS::HLE::BluetoothEmuDevice>(
                             ios->GetDeviceByName("/dev/usb/oh1/57e/305")) :
                         nullptr;
   const bool enable_wiimotes =
@@ -1038,19 +1067,39 @@ void MenuBar::ImportWiiSave()
   if (file.isEmpty())
     return;
 
-  bool cancelled = false;
   auto can_overwrite = [&] {
-    bool yes = ModalMessageBox::question(
-                   this, tr("Save Import"),
-                   tr("Save data for this title already exists in the NAND. Consider backing up "
-                      "the current data before overwriting.\nOverwrite now?")) == QMessageBox::Yes;
-    cancelled = !yes;
-    return yes;
+    return ModalMessageBox::question(
+               this, tr("Save Import"),
+               tr("Save data for this title already exists in the NAND. Consider backing up "
+                  "the current data before overwriting.\nOverwrite now?")) == QMessageBox::Yes;
   };
-  if (WiiSave::Import(file.toStdString(), can_overwrite))
-    ModalMessageBox::information(this, tr("Save Import"), tr("Successfully imported save files."));
-  else if (!cancelled)
-    ModalMessageBox::critical(this, tr("Save Import"), tr("Failed to import save files."));
+
+  const auto result = WiiSave::Import(file.toStdString(), can_overwrite);
+  switch (result)
+  {
+  case WiiSave::CopyResult::Success:
+    ModalMessageBox::information(this, tr("Save Import"), tr("Successfully imported save file."));
+    break;
+  case WiiSave::CopyResult::CorruptedSource:
+    ModalMessageBox::critical(this, tr("Save Import"),
+                              tr("Failed to import save file. The given file appears to be "
+                                 "corrupted or is not a valid Wii save."));
+    break;
+  case WiiSave::CopyResult::TitleMissing:
+    ModalMessageBox::critical(
+        this, tr("Save Import"),
+        tr("Failed to import save file. Please launch the game once, then try again."));
+    break;
+  case WiiSave::CopyResult::Cancelled:
+    break;
+  default:
+    ModalMessageBox::critical(
+        this, tr("Save Import"),
+        tr("Failed to import save file. Your NAND may be corrupt, or something is preventing "
+           "access to files within it. Try repairing your NAND (Tools -> Manage NAND -> Check "
+           "NAND...), then import the save again."));
+    break;
+  }
 }
 
 void MenuBar::ExportWiiSaves()
@@ -1574,10 +1623,10 @@ void MenuBar::SearchInstruction()
         QString::fromStdString(PPCTables::GetInstructionName(PowerPC::HostRead_U32(addr)));
     if (op == ins_name)
     {
-      NOTICE_LOG(POWERPC, "Found %s at %08x", op.toStdString().c_str(), addr);
+      NOTICE_LOG_FMT(POWERPC, "Found {} at {:08x}", op.toStdString(), addr);
       found = true;
     }
   }
   if (!found)
-    NOTICE_LOG(POWERPC, "Opcode %s not found", op.toStdString().c_str());
+    NOTICE_LOG_FMT(POWERPC, "Opcode {} not found", op.toStdString());
 }

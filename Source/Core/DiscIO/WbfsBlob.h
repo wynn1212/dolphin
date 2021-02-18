@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
-#include "Common/File.h"
+#include "Common/IOFile.h"
 #include "DiscIO/Blob.h"
 
 namespace DiscIO
@@ -33,6 +33,8 @@ public:
   bool IsDataSizeAccurate() const override { return false; }
 
   u64 GetBlockSize() const override { return m_wbfs_sector_size; }
+  bool HasFastRandomAccessInBlock() const override { return true; }
+  std::string GetCompressionMethod() const override { return {}; }
 
   bool Read(u64 offset, u64 nbytes, u8* out_ptr) override;
 

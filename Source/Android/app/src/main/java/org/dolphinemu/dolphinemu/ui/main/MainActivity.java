@@ -2,32 +2,34 @@ package org.dolphinemu.dolphinemu.ui.main;
 
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Bundle;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
+import androidx.viewpager.widget.ViewPager;
 
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.tabs.TabLayout;
 
-import androidx.viewpager.widget.ViewPager;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.appcompat.widget.Toolbar;
-
-import android.view.Menu;
-import android.view.MenuInflater;
-import android.view.MenuItem;
-import android.view.View;
-import android.widget.Toast;
-
 import org.dolphinemu.dolphinemu.R;
 import org.dolphinemu.dolphinemu.activities.EmulationActivity;
 import org.dolphinemu.dolphinemu.adapters.PlatformPagerAdapter;
+import org.dolphinemu.dolphinemu.features.settings.model.IntSetting;
+import org.dolphinemu.dolphinemu.features.settings.model.Settings;
 import org.dolphinemu.dolphinemu.features.settings.ui.MenuTag;
 import org.dolphinemu.dolphinemu.features.settings.ui.SettingsActivity;
-import org.dolphinemu.dolphinemu.utils.DirectoryInitialization;
 import org.dolphinemu.dolphinemu.services.GameFileCacheService;
 import org.dolphinemu.dolphinemu.ui.platform.Platform;
 import org.dolphinemu.dolphinemu.ui.platform.PlatformGamesView;
+import org.dolphinemu.dolphinemu.utils.AfterDirectoryInitializationRunner;
+import org.dolphinemu.dolphinemu.utils.DirectoryInitialization;
 import org.dolphinemu.dolphinemu.utils.FileBrowserHelper;
 import org.dolphinemu.dolphinemu.utils.PermissionsHandler;
 import org.dolphinemu.dolphinemu.utils.StartupHandler;
@@ -42,8 +44,9 @@ public final class MainActivity extends AppCompatActivity implements MainView
   private Toolbar mToolbar;
   private TabLayout mTabLayout;
   private FloatingActionButton mFab;
+  private static boolean sShouldRescanLibrary = true;
 
-  private MainPresenter mPresenter = new MainPresenter(this, this);
+  private final MainPresenter mPresenter = new MainPresenter(this, this);
 
   @Override
   protected void onCreate(Bundle savedInstanceState)
@@ -54,8 +57,6 @@ public final class MainActivity extends AppCompatActivity implements MainView
     findViews();
 
     setSupportActionBar(mToolbar);
-
-    mTabLayout.setupWithViewPager(mViewPager);
 
     // Set up the FAB.
     mFab.setOnClickListener(view -> mPresenter.onFabClick());
@@ -68,16 +69,8 @@ public final class MainActivity extends AppCompatActivity implements MainView
 
     if (PermissionsHandler.hasWriteAccess(this))
     {
-      PlatformPagerAdapter platformPagerAdapter = new PlatformPagerAdapter(
-              getSupportFragmentManager(), this);
-      mViewPager.setAdapter(platformPagerAdapter);
-      mViewPager.setOffscreenPageLimit(platformPagerAdapter.getCount());
-      showGames();
-      GameFileCacheService.startLoad(this);
-    }
-    else
-    {
-      mViewPager.setVisibility(View.INVISIBLE);
+      new AfterDirectoryInitializationRunner()
+              .run(this, false, this::setPlatformTabsAndStartGameFileCacheService);
     }
   }
 
@@ -85,7 +78,28 @@ public final class MainActivity extends AppCompatActivity implements MainView
   protected void onResume()
   {
     super.onResume();
-    mPresenter.addDirIfNeeded(this);
+
+    if (DirectoryInitialization.shouldStart(this))
+    {
+      DirectoryInitialization.start(this);
+      new AfterDirectoryInitializationRunner()
+              .run(this, false, this::setPlatformTabsAndStartGameFileCacheService);
+    }
+
+    mPresenter.addDirIfNeeded();
+
+    // In case the user changed a setting that affects how games are displayed,
+    // such as system language, cover downloading...
+    refetchMetadata();
+
+    if (sShouldRescanLibrary)
+    {
+      GameFileCacheService.startRescan(this);
+    }
+    else
+    {
+      sShouldRescanLibrary = true;
+    }
   }
 
   @Override
@@ -106,6 +120,10 @@ public final class MainActivity extends AppCompatActivity implements MainView
   protected void onStop()
   {
     super.onStop();
+    if (isChangingConfigurations())
+    {
+      skipRescanningLibrary();
+    }
     StartupHandler.setSessionTime(this);
   }
 
@@ -139,27 +157,30 @@ public final class MainActivity extends AppCompatActivity implements MainView
   @Override
   public void launchSettingsActivity(MenuTag menuTag)
   {
-    SettingsActivity.launch(this, menuTag, "");
+    SettingsActivity.launch(this, menuTag);
   }
 
   @Override
   public void launchFileListActivity()
   {
-    FileBrowserHelper.openDirectoryPicker(this, FileBrowserHelper.GAME_EXTENSIONS);
+    if (DirectoryInitialization.preferOldFolderPicker(this))
+    {
+      FileBrowserHelper.openDirectoryPicker(this, FileBrowserHelper.GAME_EXTENSIONS);
+    }
+    else
+    {
+      Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+      startActivityForResult(intent, MainPresenter.REQUEST_DIRECTORY);
+    }
   }
 
   @Override
-  public void launchOpenFileActivity()
+  public void launchOpenFileActivity(int requestCode)
   {
-    FileBrowserHelper.openFilePicker(this, MainPresenter.REQUEST_GAME_FILE, false,
-            FileBrowserHelper.GAME_EXTENSIONS);
-  }
-
-  @Override
-  public void launchInstallWAD()
-  {
-    FileBrowserHelper.openFilePicker(this, MainPresenter.REQUEST_WAD_FILE, false,
-            FileBrowserHelper.WAD_EXTENSION);
+    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+    intent.addCategory(Intent.CATEGORY_OPENABLE);
+    intent.setType("*/*");
+    startActivityForResult(intent, requestCode);
   }
 
   /**
@@ -171,60 +192,65 @@ public final class MainActivity extends AppCompatActivity implements MainView
   protected void onActivityResult(int requestCode, int resultCode, Intent result)
   {
     super.onActivityResult(requestCode, resultCode, result);
-    switch (requestCode)
+
+    // If the user picked a file, as opposed to just backing out.
+    if (resultCode == MainActivity.RESULT_OK)
     {
-      case MainPresenter.REQUEST_DIRECTORY:
-        // If the user picked a file, as opposed to just backing out.
-        if (resultCode == MainActivity.RESULT_OK)
-        {
-          mPresenter.onDirectorySelected(FileBrowserHelper.getSelectedPath(result));
-        }
-        break;
+      Uri uri = result.getData();
+      switch (requestCode)
+      {
+        case MainPresenter.REQUEST_DIRECTORY:
+          if (DirectoryInitialization.preferOldFolderPicker(this))
+          {
+            mPresenter.onDirectorySelected(FileBrowserHelper.getSelectedPath(result));
+          }
+          else
+          {
+            mPresenter.onDirectorySelected(result);
+          }
+          break;
 
-      case MainPresenter.REQUEST_GAME_FILE:
-        // If the user picked a file, as opposed to just backing out.
-        if (resultCode == MainActivity.RESULT_OK)
-        {
-          EmulationActivity.launchFile(this, FileBrowserHelper.getSelectedFiles(result));
-        }
-        break;
+        case MainPresenter.REQUEST_GAME_FILE:
+          FileBrowserHelper.runAfterExtensionCheck(this, uri,
+                  FileBrowserHelper.GAME_LIKE_EXTENSIONS,
+                  () -> EmulationActivity.launch(this, result.getData().toString()));
+          break;
 
-      case MainPresenter.REQUEST_WAD_FILE:
-        // If the user picked a file, as opposed to just backing out.
-        if (resultCode == MainActivity.RESULT_OK)
-        {
-          mPresenter.installWAD(FileBrowserHelper.getSelectedPath(result));
-        }
-        break;
+        case MainPresenter.REQUEST_WAD_FILE:
+          FileBrowserHelper.runAfterExtensionCheck(this, uri, FileBrowserHelper.WAD_EXTENSION,
+                  () -> mPresenter.installWAD(result.getData().toString()));
+          break;
+
+        case MainPresenter.REQUEST_WII_SAVE_FILE:
+          FileBrowserHelper.runAfterExtensionCheck(this, uri, FileBrowserHelper.BIN_EXTENSION,
+                  () -> mPresenter.importWiiSave(result.getData().toString()));
+          break;
+      }
+    }
+    else
+    {
+      skipRescanningLibrary();
     }
   }
 
   @Override
-  public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults)
+  public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+          @NonNull int[] grantResults)
   {
-    switch (requestCode)
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+    if (requestCode == PermissionsHandler.REQUEST_CODE_WRITE_PERMISSION)
     {
-      case PermissionsHandler.REQUEST_CODE_WRITE_PERMISSION:
-        if (grantResults[0] == PackageManager.PERMISSION_GRANTED)
-        {
-          DirectoryInitialization.start(this);
-          PlatformPagerAdapter platformPagerAdapter = new PlatformPagerAdapter(
-                  getSupportFragmentManager(), this);
-          mViewPager.setAdapter(platformPagerAdapter);
-          mViewPager.setOffscreenPageLimit(platformPagerAdapter.getCount());
-          mTabLayout.setupWithViewPager(mViewPager);
-          mViewPager.setVisibility(View.VISIBLE);
-          GameFileCacheService.startLoad(this);
-        }
-        else
-        {
-          Toast.makeText(this, R.string.write_permission_needed, Toast.LENGTH_SHORT)
-                  .show();
-        }
-        break;
-      default:
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        break;
+      if (grantResults[0] == PackageManager.PERMISSION_GRANTED)
+      {
+        DirectoryInitialization.start(this);
+        new AfterDirectoryInitializationRunner()
+                .run(this, false, this::setPlatformTabsAndStartGameFileCacheService);
+      }
+      else
+      {
+        Toast.makeText(this, R.string.write_permission_needed, Toast.LENGTH_LONG).show();
+      }
     }
   }
 
@@ -252,11 +278,61 @@ public final class MainActivity extends AppCompatActivity implements MainView
     }
   }
 
+  private void refetchMetadata()
+  {
+    for (Platform platform : Platform.values())
+    {
+      PlatformGamesView fragment = getPlatformGamesView(platform);
+      if (fragment != null)
+      {
+        fragment.refetchMetadata();
+      }
+    }
+  }
+
   @Nullable
   private PlatformGamesView getPlatformGamesView(Platform platform)
   {
     String fragmentTag = "android:switcher:" + mViewPager.getId() + ":" + platform.toInt();
 
     return (PlatformGamesView) getSupportFragmentManager().findFragmentByTag(fragmentTag);
+  }
+
+  // Don't call this before DirectoryInitialization completes.
+  private void setPlatformTabsAndStartGameFileCacheService()
+  {
+    PlatformPagerAdapter platformPagerAdapter = new PlatformPagerAdapter(
+            getSupportFragmentManager(), this);
+    mViewPager.setAdapter(platformPagerAdapter);
+    mViewPager.setOffscreenPageLimit(platformPagerAdapter.getCount());
+    mTabLayout.setupWithViewPager(mViewPager);
+    mTabLayout.addOnTabSelectedListener(new TabLayout.ViewPagerOnTabSelectedListener(mViewPager)
+    {
+      @Override
+      public void onTabSelected(@NonNull TabLayout.Tab tab)
+      {
+        super.onTabSelected(tab);
+
+        try (Settings settings = new Settings())
+        {
+          settings.loadSettings();
+
+          IntSetting.MAIN_LAST_PLATFORM_TAB.setInt(settings, tab.getPosition());
+
+          // Context is set to null to avoid toasts
+          settings.saveSettings(null, null);
+        }
+      }
+    });
+
+    mViewPager.setCurrentItem(IntSetting.MAIN_LAST_PLATFORM_TAB.getIntGlobal());
+
+    showGames();
+    GameFileCacheService.startLoad(this);
+  }
+
+  public static void skipRescanningLibrary()
+  {
+    sShouldRescanLibrary = false;
   }
 }
